@@ -1,0 +1,176 @@
+library(funcml)
+
+test_that("shap additivity approximately holds", {
+  set.seed(1)
+  dat <- data.frame(y = rnorm(30), x = rnorm(30), z = rnorm(30))
+  f <- fit(y ~ x + z, data = dat, model = "glm")
+  sh <- interpret(f, dat, method = "shap", nsim = 20, nsamples = 20)
+  preds <- predict(f, dat[1, , drop = FALSE])
+  baseline <- sh$result$baseline[1]
+  approx_sum <- sum(sh$result$shap) + baseline
+  expect_true(abs(approx_sum - preds[1]) < 1)
+})
+
+test_that("classification interpretability supports subsetted features", {
+  set.seed(11)
+  dat <- data.frame(
+    x1 = rnorm(80),
+    x2 = rnorm(80),
+    x3 = rnorm(80)
+  )
+  eta <- 1.2 * dat$x1 - 0.8 * dat$x2 + 0.4 * dat$x3
+  pr <- stats::plogis(eta)
+  dat$y <- factor(ifelse(runif(80) < pr, "yes", "no"), levels = c("no", "yes"))
+
+  fit_obj <- fit(y ~ x1 + x2 + x3, data = dat, model = "glm")
+
+  vi <- interpret(
+    fit_obj, dat,
+    method = "vip",
+    features = c("x1", "x2"),
+    metric = "logloss",
+    nsim = 3,
+    seed = 1
+  )
+  loc <- interpret(
+    fit_obj, dat,
+    method = "local_model",
+    features = c("x1", "x2"),
+    newdata = dat[1, , drop = FALSE],
+    nsamples = 40,
+    class_level = "yes",
+    k = 2
+  )
+  sh <- interpret(
+    fit_obj, dat,
+    method = "shap",
+    features = c("x1", "x2"),
+    newdata = dat[1, , drop = FALSE],
+    nsim = 12,
+    nsamples = 50,
+    class_level = "yes",
+    seed = 2
+  )
+
+  expect_true(all(c("x1", "x2") %in% vi$result$scores$feature))
+  expect_gt(nrow(loc$result$results), 0)
+  expect_true(all(grepl(" = ", loc$result$results$feature.value, fixed = TRUE)))
+  expect_true(all(c("observed_value", "encoded_value", "beta", "effect") %in% names(loc$result$results)))
+  expect_equal(sort(sh$result$feature), c("x1", "x2"))
+  expect_true(all(grepl(" = ", sh$result$feature_label, fixed = TRUE)))
+})
+
+test_that("vip always uses internal permutation importance", {
+  set.seed(21)
+  dat <- data.frame(
+    x1 = rnorm(90),
+    x2 = rnorm(90),
+    x3 = rnorm(90)
+  )
+  dat$y <- 1.4 * dat$x1 - 0.7 * dat$x2 + 0.2 * dat$x3 + rnorm(90, sd = 0.2)
+
+  fit_obj <- fit(y ~ x1 + x2 + x3, data = dat, model = "rpart")
+
+  vip_auto <- interpret(
+    fit_obj,
+    dat,
+    method = "vip",
+    importance_type = "auto",
+    nsim = 6,
+    seed = 5
+  )
+  vip_model <- interpret(
+    fit_obj,
+    dat,
+    method = "vip",
+    importance_type = "model",
+    nsim = 6,
+    seed = 5
+  )
+
+  expect_equal(vip_auto$result$scores, vip_model$result$scores)
+  expect_equal(vip_auto$diagnostics$engine, "permute")
+  expect_equal(vip_model$diagnostics$engine, "permute")
+})
+
+test_that("ICE handles vectorized feature grids for numeric predictors", {
+  fit_obj <- fit(mpg ~ wt + hp, data = mtcars, model = "glm")
+
+  ice <- interpret(
+    fit_obj,
+    mtcars,
+    method = "ice",
+    features = "wt",
+    nsamples = 10
+  )
+
+  expect_s3_class(ice, "funcml_ice")
+  expect_gt(nrow(ice$result$curves), 0)
+  expect_true(all(c("id", "feature", "value", "yhat") %in% names(ice$result$curves)))
+})
+
+test_that("shap paths sum back to the prediction", {
+  set.seed(31)
+  dat <- data.frame(y = rnorm(50), x = rnorm(50), z = rnorm(50))
+  dat$y <- 1.8 * dat$x - 0.9 * dat$z + rnorm(50, sd = 0.2)
+  fit_obj <- fit(y ~ x + z, data = dat, model = "glm")
+
+  sh <- interpret(
+    fit_obj,
+    dat,
+    method = "shap",
+    newdata = dat[1, , drop = FALSE],
+    nsim = 40,
+    nsamples = 30,
+    seed = 1
+  )
+
+  expect_equal(sh$result$baseline[1] + sum(sh$result$shap), sh$result$prediction[1], tolerance = 1e-8)
+})
+
+test_that("shap supports multiple observations for summary-style output", {
+  set.seed(41)
+  dat <- data.frame(y = rnorm(30), x = rnorm(30), z = rnorm(30))
+  dat$y <- 1.5 * dat$x - 0.6 * dat$z + rnorm(30, sd = 0.2)
+  fit_obj <- fit(y ~ x + z, data = dat, model = "glm")
+
+  sh <- interpret(
+    fit_obj,
+    dat,
+    method = "shap",
+    newdata = dat[1:5, , drop = FALSE],
+    nsim = 12,
+    nsamples = 20,
+    seed = 1
+  )
+
+  expect_equal(sort(unique(sh$result$observation)), 1:5)
+  expect_true(all(c("observation", "feature", "shap", "feature_value", "feature_label") %in% names(sh$result)))
+})
+
+test_that("breakdown is no longer an available interpretability method", {
+  fit_obj <- fit(mpg ~ wt + hp, data = mtcars, model = "glm")
+  expect_error(
+    interpret(fit_obj, mtcars, method = "breakdown"),
+    "arg"
+  )
+})
+
+test_that("calibration interpretability returns curve and calibration errors", {
+  set.seed(51)
+  dat <- data.frame(
+    x1 = rnorm(120),
+    x2 = rnorm(120)
+  )
+  eta <- 1.1 * dat$x1 - 0.7 * dat$x2
+  dat$y <- factor(ifelse(runif(120) < stats::plogis(eta), "yes", "no"), levels = c("no", "yes"))
+
+  fit_obj <- fit(y ~ x1 + x2, data = dat, model = "glm")
+  cal <- interpret(fit_obj, dat, method = "calibration", bins = 6, strategy = "quantile")
+
+  expect_s3_class(cal, "funcml_calibration")
+  expect_true(all(c("curve", "prob", "truth", "positive", "ece", "mce") %in% names(cal$result)))
+  expect_equal(nrow(cal$result$curve), 6)
+  expect_true(is.finite(cal$result$ece))
+  expect_true(is.finite(cal$result$mce))
+})
