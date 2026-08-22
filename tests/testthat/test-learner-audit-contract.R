@@ -76,6 +76,7 @@ audit_spec_for_test <- function(model, scenario) {
     glmnet = list(alpha = 0.5),
     ranger = list(num.trees = 80L, min.node.size = 3L),
     nnet = list(size = 4L, decay = 0.01, maxit = 150L),
+    mlp = list(hidden_units = 4L, epochs = 8L, batch_size = 16L, validation = 0.2, patience = 3L, lr = 0.01),
     randomForest = list(ntree = 80L),
     gbm = list(n.trees = 60L, interaction.depth = 2L, shrinkage = 0.05, n.minobsinnode = 5L),
     C50 = list(trials = 5L),
@@ -126,7 +127,7 @@ audit_datasets <- list(
 test_that("learner registry support metadata is coherent", {
   reg <- funcml:::funcml_registry()
 
-  expect_equal(length(reg), 25L)
+  expect_equal(length(reg), 27L)
   expect_true(all(vapply(reg, function(x) is.character(x$package) && nzchar(x$package), logical(1))))
   expect_true(all(vapply(reg, function(x) is.list(x$supports), logical(1))))
   expect_true(all(vapply(reg, function(x) is.function(x$fit_xy), logical(1))))
@@ -136,6 +137,8 @@ test_that("learner registry support metadata is coherent", {
 
 test_that("advertised learner raw and probability contracts hold package-wide", {
   reg <- funcml:::funcml_registry()
+  available_learners <- list_learners(available = TRUE, columns = "learner")$learner
+  reg <- reg[intersect(names(reg), available_learners)]
   scenario_map <- do.call(
     rbind,
     lapply(names(reg), function(model) {
@@ -225,6 +228,8 @@ test_that("advertised learner raw and probability contracts hold package-wide", 
 
 test_that("interpretability contract holds for supported learner paths", {
   reg <- funcml:::funcml_registry()
+  available_learners <- list_learners(available = TRUE, columns = "learner")$learner
+  reg <- reg[intersect(names(reg), available_learners)]
   failures <- character()
 
   for (model in names(reg)) {

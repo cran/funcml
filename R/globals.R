@@ -7,5 +7,8 @@ utils::globalVariables(c(
   "surrogate", "index", "std_dev", "lower", "upper", "feature_label",
   "feature_value_scaled", "abs_shap", "feature_x", "feature_y",
   "raw_score", "config_label", "model", "conf_low", "conf_high",
-  "prob", "mean_pred", "observed", "n"
+  "prob", "mean_pred", "observed", "n", "self", "outcome_value",
+  "scenario", "mean", "sensitivity", "specificity", "threshold",
+  "net_benefit", "strategy", "scaled_value", "colour_value", "mean_abs",
+  "pair", "hjust"
 ))

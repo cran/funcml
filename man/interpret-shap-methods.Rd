@@ -25,14 +25,16 @@
 \code{"summary"}, \code{"beeswarm"}, \code{"importance"}, \code{"bar"}, \code{"dependence"},
 \code{"dependence2d"}, or \code{"interaction"}.}
 
-\item{...}{Additional arguments passed to the underlying method.}
+\item{...}{Additional arguments passed to the underlying method. For
+\code{kind = "summary"}/\code{"beeswarm"}, \code{v} restricts the plot to a single
+feature (default: all interpreted features).}
 
 \item{object}{A \code{funcml_shap} object.}
 }
 \value{
-\code{plot()} returns a visualization object (typically a \code{ggplot2}
-object) from \code{shapviz}. \code{print()} returns the input object invisibly.
-\code{summary()} returns the SHAP contribution table invisibly.
+\code{plot()} returns a \code{ggplot2} object. \code{print()} returns the input
+object invisibly. \code{summary()} returns the SHAP contribution table
+invisibly.
 }
 \description{
 These methods provide the standard \code{print()}, \code{summary()}, and \code{plot()}

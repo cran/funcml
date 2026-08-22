@@ -1,3 +1,166 @@
+# funcml 0.9.0
+
+- Prepared for CRAN resubmission: removed the unused `methods` package
+  from `Imports`, added explicit `importFrom` declarations for
+  `predict()`, `model.frame()`, `model.response()`, `setNames()`,
+  `median()` (stats) and `tail()` (utils) via a new package-level
+  `R/funcml-package.R`, and excluded `LICENSE.md` from the build (the
+  package uses the standard `GPL-3` license text that R bundles
+  automatically; the file remains in the GitHub repo only). `R CMD
+  check --as-cran` now passes with 0 errors, 0 warnings, 0 notes.
+
+# funcml 0.8.9
+
+- Renamed `compare_learners()` to `compare()` for consistency with the
+  other short, verb-named entry points (`fit()`, `evaluate()`, `tune()`,
+  `interpret()`, `estimate()`). This is a breaking change with no
+  backward-compatible alias: code calling `compare_learners()` must be
+  updated to call `compare()`. Note that `compare()` masks
+  `testthat::compare()` when both packages are attached.
+
+# funcml 0.8.8
+
+- Prepared for CRAN resubmission (previous CRAN version: 0.7.1):
+  removed the redundant `Author`/`Maintainer` DESCRIPTION fields (they
+  had drifted out of sync with `Authors@R`, triggering a `R CMD check`
+  NOTE) in favor of deriving them from `Authors@R`, and fixed a
+  non-canonical CRAN task view URL in the README. `R CMD check
+  --as-cran` now passes with 0 errors, 0 warnings, 0 notes.
+
+# funcml 0.8.7
+
+- Removed the stale hand-written `inst/CITATION`, which hardcoded "R
+  package version 0.7.1" and had drifted six releases behind. R now
+  falls back to the default citation auto-generated from `DESCRIPTION`,
+  which always reflects the installed version.
+- README's Citation section now shows the live `citation("funcml")`
+  output instead of hardcoded text.
+
+# funcml 0.8.6
+
+- Reverted the SHAP/local-surrogate bar plot colors to green = positive,
+  red = negative (the original convention), after the two intermediate
+  swaps in 0.8.1 and 0.8.5.
+
+# funcml 0.8.5
+
+- Added numeric value labels to every bar-chart-style plot for easier
+  reading: SHAP waterfall (`+0.148`/`-0.089` style, signed), SHAP
+  feature importance, SHAP interaction strength, and local surrogate
+  (`interpret(method = "local_model")`) contributions. The local
+  surrogate plot's colors were also swapped to match the SHAP
+  convention (positive = red, negative = green).
+
+# funcml 0.8.4
+
+- Fixed a hang introduced in 0.8.2: `interpret(method = "shap", ncores
+  = <n>)` with `xgboost`, `lightgbm`, `mlp`, `densemlp`, or `bart` on
+  Unix could hang indefinitely, because `functionals::fmap()` forks the
+  process (`parallel::mclapply()`) and those models' fitted state holds
+  a C/C++ handle that is not valid in the forked child. `ncores` is now
+  ignored (with a warning) for those models, falling back to
+  sequential; other models parallelize as before.
+
+# funcml 0.8.3
+
+- SHAP waterfall (`kind = "waterfall"`) is now a zero-anchored per-feature
+  contribution bar chart instead of a cumulative chained waterfall: every
+  bar starts at 0 and extends to its own SHAP value, so no bar crosses
+  from one side of the reference line to the other. The vertical
+  reference line is fixed at 0 instead of the baseline prediction.
+- SHAP beeswarm/summary (`kind = "summary"`/`"beeswarm"`) now uses the
+  standard SHAP blue (low) to red (high) colorbar on the right, instead
+  of the previous bottom yellow-to-purple legend, and drops the
+  per-feature numeric labels for plain feature names. It also gained a
+  `v` argument to restrict the plot to a single feature.
+
+# funcml 0.8.2
+
+- `interpret(method = "shap")` gained an `ncores` argument that
+  parallelizes the per-observation Monte Carlo SHAP computation via
+  `functionals::fmap()` (the same backend already used by
+  `evaluate()`/`tune()`/`compare_learners()`). Each observation is now
+  seeded independently (`seed + observation_index - 1`) so results are
+  identical whether run sequentially or in parallel; this changes the
+  exact values produced by a seeded `interpret(method = "shap")` call
+  compared to earlier releases, though the estimator itself (Monte
+  Carlo permutation SHAP) is unchanged.
+
+# funcml 0.8.1
+
+- Printed result tables (`evaluate()`, `compare_learners()`, `tune()`,
+  `interpret(method = "calibration")`, `interpret(method = "dca")`,
+  `roc_curve()`, `auc_ci()`) now round numeric columns to 4 digits by
+  default (`digits` argument on the relevant `print()`/`summary()`
+  methods and on `auc_ci()`), instead of printing full floating-point
+  precision.
+- Swapped the SHAP waterfall/force colors: positive contributions are
+  now red, negative are green.
+- Reworked the SHAP beeswarm/summary plot (`kind = "beeswarm"` /
+  `"summary"`) to show mean |SHAP value| next to each feature name, a
+  yellow-to-purple `viridis` "plasma" feature-value gradient, and a
+  bottom legend with Low/High endpoints. Also fixed a row-order
+  misalignment bug in the per-feature value scaling introduced by the
+  0.8.0 native SHAP plot rewrite.
+
+# funcml 0.8.0
+
+- Added `densemlp` as a new learner, wrapping the published `densemlp`
+  CRAN package. It complements the existing built-in `mlp` learner with
+  richer architecture options (residual connections, gated blocks, input
+  projection, focal loss, label smoothing, LR schedules) for regression
+  and classification.
+- Added `roc_curve()` and `auc_ci()`, backed by the `pROC` package:
+  `roc_curve()` returns the full sensitivity/specificity curve plus a
+  `plot()` method, and `auc_ci()` reports AUC with a DeLong (default) or
+  bootstrap confidence interval. funcml's own fast `auc()` is unchanged
+  and remains what resampling/tuning use internally.
+- Added decision curve analysis (Vickers and Elkin, 2006): `dca()` computes
+  net benefit across risk thresholds for the model, "treat all", and
+  "treat none" strategies, and `interpret(method = "dca")` runs it directly
+  on a fitted binary classifier with a `plot()` method.
+- Removed the `shapviz` dependency. All SHAP plot kinds (`waterfall`,
+  `force`, `summary`/`beeswarm`, `importance`/`bar`, `dependence`,
+  `dependence2d`, `interaction`) are now native `ggplot2` implementations
+  reading directly from funcml's own SHAP result table. The underlying
+  SHAP values were already funcml's own Monte Carlo permutation estimate
+  (`interpret(method = "shap")`); shapviz was only ever used for plotting.
+- Reworked `theme_funcml()` to match the CLAVUS Nature Medicine figure
+  style: `theme_classic()` base, Okabe-Ito colorblind-safe palette, bold
+  unboxed strip labels, and `grey92` major gridlines. All package plots
+  (`interpret()`, `evaluate()`, `compare_learners()`, `tune()`,
+  `estimate()`) now share this theme instead of each building its own
+  ad-hoc `theme_bw()`/`theme_minimal()` variant.
+- Migrated internal row-accumulation (resampling folds, tuning grids,
+  learner comparisons, PDP/ICE/ALE curves, permutation importance,
+  interaction grids, MLP training history) from `do.call(rbind, ...)` to
+  `data.table::rbindlist()` for faster combination of many small result
+  frames. All public return objects remain plain `data.frame`s; no API
+  or behavior change.
+- Added a citation for Naimi, Cole, and Kennedy (2016)
+  <doi:10.1093/ije/dyw323> to `DESCRIPTION`, covering the plug-in
+  g-computation method.
+- `plot.funcml_pdp()` now fixes the y-axis to the [0, 1] probability scale
+  for classification PDPs (`type = "prob"`), instead of auto-scaling to the
+  local range of the curve, which could visually exaggerate small effects.
+  Regression PDPs are unaffected.
+- Moved every learner engine package (`MASS`, `mgcv`, `nnet`, `rpart`,
+  `glmnet`, `ranger`, `e1071`, `randomForest`, `gbm`, `C50`, `kknn`,
+  `earth`, `naivebayes`, `mda`, `ada`, `pls`, `partykit`, `dbarts`,
+  `torch`, `xgboost`, `lightgbm`, `densemlp`) from `Suggests` to
+  `Imports`, so a standard installation always has every advertised
+  learner available and `learners()`/`fit()` cannot fail with a
+  missing-package error for a registered model.
+
+# funcml 0.7.2
+
+- Added `mlp` as an internal torch-backed learner for regression, binary
+  classification, and multiclass classification.
+- Added CRAN installation instructions to the README and kept the GitHub
+  installation path for development snapshots.
+- Added a README note that the `funcml` companion paper is submitted to
+  JMLR.
+
 # funcml 0.7.1
 
 - Refined the README into a more detailed progressive API walkthrough with

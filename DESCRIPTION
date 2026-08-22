@@ -1,7 +1,7 @@
 Package: funcml
 Type: Package
 Title: Functional Machine Learning Framework
-Version: 0.7.1
+Version: 0.9.0
 Depends: R (>= 3.5.0)
 Authors@R: c(
     person(given = "Imad", family = "El Badisy", role = c("aut", "cre"), email = "elbadisyimad@gmail.com")
@@ -24,24 +24,26 @@ Description: A compact and explicit machine learning framework for
     opinionated: preprocessing is expected to occur outside the modeling
     step, and the API emphasizes explicit inputs, consistent object
     contracts, and compact interfaces rather than feature-by-feature
-    competition with larger machine learning ecosystems.
+    competition with larger machine learning ecosystems. Plug-in
+    g-computation follows Naimi, Cole, and Kennedy (2016)
+    <doi:10.1093/ije/dyw323>.
 License: GPL-3
-URL: https://github.com/ielbadisy/funcml
+URL: https://CRAN.R-project.org/package=funcml
 BugReports: https://github.com/ielbadisy/funcml/issues
 Encoding: UTF-8
 LazyData: true
 RoxygenNote: 7.3.3
-Imports: stats, utils, methods, ggplot2, functionals, grDevices, tools,
-        MASS, mgcv, nnet, rpart, glmnet, ranger, e1071, randomForest,
-        gbm, C50, kknn, earth, naivebayes, mda, ada, pls, partykit,
-        dbarts, xgboost, lightgbm, shapviz
+Imports: stats, utils, ggplot2, functionals, grDevices, tools,
+        data.table, MASS, mgcv, nnet, rpart, glmnet, ranger, e1071,
+        randomForest, gbm, C50, kknn, earth, naivebayes, mda, ada, pls,
+        partykit, dbarts, torch, xgboost, lightgbm, densemlp
 Suggests: testthat (>= 3.1.0), knitr, rmarkdown, roxygen2, gggenes,
-        ggfittext
+        ggfittext, pROC
 VignetteBuilder: knitr
 Config/testthat/edition: 3
 NeedsCompilation: no
-Packaged: 2026-04-21 10:35:39 UTC; imad-el-badisy
+Packaged: 2026-08-21 09:09:57 UTC; imad-el-badisy
 Author: Imad El Badisy [aut, cre]
 Maintainer: Imad El Badisy <elbadisyimad@gmail.com>
 Repository: CRAN
-Date/Publication: 2026-04-21 21:12:15 UTC
+Date/Publication: 2026-08-22 15:10:24 UTC

@@ -1,8 +1,24 @@
 
 # funcml
 
+[![R-CMD-check](https://github.com/ielbadisy/funcml/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/ielbadisy/funcml/actions/workflows/R-CMD-check.yaml)
+[![CRAN
+status](https://www.r-pkg.org/badges/version/funcml)](https://CRAN.R-project.org/package=funcml)
+[![CRAN
+checks](https://badges.cranchecks.info/worst/funcml.svg)](https://cran.r-project.org/web/checks/check_results_funcml.html)
+[![CRAN
+downloads](https://cranlogs.r-pkg.org/badges/grand-total/funcml)](https://cran.r-project.org/package=funcml)
+[![License:
+GPL-3](https://img.shields.io/badge/license-GPL--3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![CRAN Task View: Machine
+Learning](https://img.shields.io/badge/CRAN%20Task%20View-Machine%20Learning-2c7fb8)](https://CRAN.R-project.org/view=MachineLearning)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20707605.svg)](https://doi.org/10.5281/zenodo.20707605)
+
 `funcml` is a functional machine learning framework for tabular data in
 R.
+
+`funcml` is listed in the [CRAN Task View: Machine Learning &
+Statistical Learning](https://CRAN.R-project.org/view=MachineLearning).
 
 It provides one explicit interface for the core modeling workflow:
 
@@ -10,7 +26,7 @@ It provides one explicit interface for the core modeling workflow:
 - generate predictions with `predict()`
 - validate performance with `evaluate()`
 - tune hyperparameters with `tune()`
-- compare learners with `compare_learners()`
+- compare learners with `compare()`
 - interpret fitted models with `interpret()`
 - estimate causal effects with `estimate()`
 
@@ -18,9 +34,13 @@ The package is intentionally compact and opinionated: preprocessing
 happens before modeling, inputs stay explicit, and the API stays small
 instead of expanding into a large orchestration layer.
 
+A companion paper for `funcml` is submitted to JMLR.
+
 ## Installation
 
 ``` r
+install.packages("funcml")
+
 install.packages("remotes")
 remotes::install_github("ielbadisy/funcml")
 ```
@@ -34,7 +54,7 @@ fit()
 predict()
 evaluate()
 tune()
-compare_learners()
+compare()
 interpret()
 estimate()
 ```
@@ -47,61 +67,65 @@ interpretation methods.
 ``` r
 list_learners()
 #>         learner   fit   predict   tune has_fit has_predict has_tune available
-#> 15     adaboost fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 22         bart fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 9           C50 fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 18      cforest fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 17        ctree fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 6     e1071_svm fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 11        earth fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 14          fda fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 12          gam fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 8           gbm fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 17     adaboost fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 24         bart fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 11          C50 fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 20      cforest fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 19        ctree fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 7      densemlp fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 8     e1071_svm fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 13        earth fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 16          fda fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 14          gam fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 10          gbm fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
 #> 1           glm fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
 #> 3        glmnet fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 10         kknn fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 19          lda fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 21     lightgbm fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 13   naivebayes fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 12         kknn fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 21          lda fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 23     lightgbm fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 6           mlp fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 15   naivebayes fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
 #> 5          nnet fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 16          pls fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 20          qda fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 7  randomForest fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 18          pls fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 22          qda fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 9  randomForest fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
 #> 4        ranger fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
 #> 2         rpart fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 24     stacking fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 25 superlearner fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 23      xgboost fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 26     stacking fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 27 superlearner fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 25      xgboost fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
 ```
 
 ``` r
 list_tunable_learners()
 #>         learner   fit   predict   tune has_fit has_predict has_tune available
-#> 15     adaboost fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 22         bart fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 9           C50 fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 18      cforest fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 17        ctree fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 6     e1071_svm fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 11        earth fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 14          fda fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 12          gam fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 8           gbm fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 17     adaboost fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 24         bart fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 11          C50 fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 20      cforest fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 19        ctree fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 7      densemlp fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 8     e1071_svm fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 13        earth fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 16          fda fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 14          gam fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 10          gbm fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
 #> 1           glm fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
 #> 3        glmnet fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 10         kknn fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 19          lda fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 21     lightgbm fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 13   naivebayes fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 12         kknn fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 21          lda fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 23     lightgbm fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 6           mlp fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 15   naivebayes fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
 #> 5          nnet fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 16          pls fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 20          qda fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 7  randomForest fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 18          pls fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 22          qda fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 9  randomForest fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
 #> 4        ranger fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
 #> 2         rpart fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 24     stacking fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 25 superlearner fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
-#> 23      xgboost fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 26     stacking fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 27 superlearner fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
+#> 25      xgboost fit() predict() tune()    TRUE        TRUE     TRUE      TRUE
 ```
 
 ``` r
@@ -249,30 +273,18 @@ eval_obj <- evaluate(
 
 eval_obj
 #> <funcml_eval> model: xgboost | task: classification
-#>               metric       mean          sd n   std_error conf_level   conf_low
-#> 1           accuracy 0.74732290 0.014617703 4 0.007308852       0.95 0.72406287
-#> 2          precision 0.69316319 0.023420234 4 0.011710117       0.95 0.65589637
-#> 3             recall 0.64049156 0.017832484 4 0.008916242       0.95 0.61211610
-#> 4        specificity 0.64049156 0.017832484 4 0.008916242       0.95 0.61211610
-#> 5                 f1 0.66573813 0.019521730 4 0.009760865       0.95 0.63467470
-#> 6  balanced_accuracy 0.64049156 0.017832484 4 0.008916242       0.95 0.61211610
-#> 7            logloss 0.49248120 0.008783385 4 0.004391692       0.95 0.47850488
-#> 8              brier 0.32776953 0.007550594 4 0.003775297       0.95 0.31575485
-#> 9                auc 0.78694529 0.011843752 4 0.005921876       0.95 0.76809924
-#> 10               ece 0.03590688 0.004195513 4 0.002097757       0.95 0.02923089
-#> 11               mce 0.08002388 0.013678803 4 0.006839402       0.95 0.05825786
-#>     conf_high
-#> 1  0.77058293
-#> 2  0.73043001
-#> 3  0.66886702
-#> 4  0.66886702
-#> 5  0.69680156
-#> 6  0.66886702
-#> 7  0.50645753
-#> 8  0.33978421
-#> 9  0.80579135
-#> 10 0.04258288
-#> 11 0.10178991
+#>               metric   mean     sd n std_error conf_level conf_low conf_high
+#> 1           accuracy 0.7473 0.0146 4    0.0073       0.95   0.7241    0.7706
+#> 2          precision 0.6932 0.0234 4    0.0117       0.95   0.6559    0.7304
+#> 3             recall 0.6405 0.0178 4    0.0089       0.95   0.6121    0.6689
+#> 4        specificity 0.6405 0.0178 4    0.0089       0.95   0.6121    0.6689
+#> 5                 f1 0.6657 0.0195 4    0.0098       0.95   0.6347    0.6968
+#> 6  balanced_accuracy 0.6405 0.0178 4    0.0089       0.95   0.6121    0.6689
+#> 7            logloss 0.4925 0.0088 4    0.0044       0.95   0.4785    0.5065
+#> 8              brier 0.3278 0.0076 4    0.0038       0.95   0.3158    0.3398
+#> 9                auc 0.7869 0.0118 4    0.0059       0.95   0.7681    0.8058
+#> 10               ece 0.0359 0.0042 4    0.0021       0.95   0.0292    0.0426
+#> 11               mce 0.0800 0.0137 4    0.0068       0.95   0.0583    0.1018
 ```
 
 ``` r
@@ -312,10 +324,8 @@ tune_obj <- tune(
 tune_obj
 #> <funcml_tune> metric=logloss direction=min search=grid
 #> Best:
-#>   max_depth eta nrounds      mean       sd n   std_error conf_level conf_low
-#> 8         3 0.1      30 0.4932667 0.011934 3 0.006890096       0.95 0.463621
-#>   conf_high
-#> 8 0.5229124
+#>   max_depth eta nrounds   mean     sd n std_error conf_level conf_low conf_high
+#> 8         3 0.1      30 0.4933 0.0119 3    0.0069       0.95   0.4636    0.5229
 ```
 
 ``` r
@@ -326,11 +336,11 @@ plot(tune_obj)
 
 ## Compare learners
 
-`compare_learners()` benchmarks multiple learners under a common
-resampling design.
+`compare()` benchmarks multiple learners under a common resampling
+design.
 
 ``` r
-compare_obj <- compare_learners(
+compare_obj <- compare(
   data = demo_dat,
   formula = status ~ age + gender + bmi + diabetes + smoke + covered_health,
   models = c("glm", "rpart", "xgboost"),
@@ -341,20 +351,20 @@ compare_obj <- compare_learners(
 
 compare_obj
 #> <funcml_compare> task: classification | tuned: FALSE
-#>     model   metric      mean          sd n   std_error conf_level  conf_low
-#> 1     glm accuracy 0.7450577 0.017034681 4 0.008517341       0.95 0.7179517
-#> 2     glm  logloss 0.4897129 0.013140445 4 0.006570223       0.95 0.4688036
-#> 3   rpart accuracy 0.7337315 0.016711299 4 0.008355649       0.95 0.7071401
-#> 4   rpart  logloss 0.5310715 0.012975648 4 0.006487824       0.95 0.5104243
-#> 5 xgboost accuracy 0.7473229 0.014617703 4 0.007308852       0.95 0.7240629
-#> 6 xgboost  logloss 0.4924812 0.008783385 4 0.004391692       0.95 0.4785049
-#>   conf_high tuned rank
-#> 1 0.7721636 FALSE    2
-#> 2 0.5106223 FALSE    1
-#> 3 0.7603229 FALSE    3
-#> 4 0.5517186 FALSE    3
-#> 5 0.7705829 FALSE    1
-#> 6 0.5064575 FALSE    2
+#>     model   metric   mean     sd n std_error conf_level conf_low conf_high
+#> 1     glm accuracy 0.7451 0.0170 4    0.0085       0.95   0.7180    0.7722
+#> 2     glm  logloss 0.4897 0.0131 4    0.0066       0.95   0.4688    0.5106
+#> 3   rpart accuracy 0.7337 0.0167 4    0.0084       0.95   0.7071    0.7603
+#> 4   rpart  logloss 0.5311 0.0130 4    0.0065       0.95   0.5104    0.5517
+#> 5 xgboost accuracy 0.7473 0.0146 4    0.0073       0.95   0.7241    0.7706
+#> 6 xgboost  logloss 0.4925 0.0088 4    0.0044       0.95   0.4785    0.5065
+#>   tuned rank
+#> 1 FALSE    2
+#> 2 FALSE    1
+#> 3 FALSE    3
+#> 4 FALSE    3
+#> 5 FALSE    1
+#> 6 FALSE    2
 ```
 
 ``` r
@@ -409,8 +419,66 @@ plot(ale_obj)
 
 <img src="man/figures/README-interpret-ale-1.png" alt="" width="100%" />
 
-Other supported methods include PDP, ICE, SHAP, local explanations,
-surrogate models, interaction diagnostics, and calibration plots.
+Partial dependence shows the model-implied effect of one feature,
+averaged over the rest of the data.
+
+``` r
+pdp_obj <- interpret(
+  fit = fit_obj,
+  data = demo_dat,
+  method = "pdp",
+  features = c("age"),
+  type = "prob"
+)
+
+plot(pdp_obj)
+```
+
+<img src="man/figures/README-interpret-pdp-1.png" alt="" width="100%" />
+
+SHAP values explain an individual prediction.
+`interpret(method = "shap")` computes them with funcml’s own Monte Carlo
+permutation estimate (no external SHAP dependency); `plot()` supports
+waterfall, force, beeswarm/summary, importance, dependence,
+dependence2d, and interaction views.
+
+``` r
+shap_obj <- interpret(
+  fit = fit_obj,
+  data = demo_dat,
+  method = "shap",
+  newdata = demo_dat[1, , drop = FALSE],
+  nsim = 30,
+  type = "prob",
+  seed = 42
+)
+
+plot(shap_obj, kind = "waterfall")
+```
+
+<img src="man/figures/README-interpret-shap-1.png" alt="" width="100%" />
+
+The beeswarm/summary view explains the model across many observations at
+once, ordered by mean absolute SHAP value and colored by feature value.
+
+``` r
+shap_many_obj <- interpret(
+  fit = fit_obj,
+  data = demo_dat,
+  method = "shap",
+  newdata = demo_dat[1:80, , drop = FALSE],
+  nsim = 15,
+  type = "prob",
+  seed = 42
+)
+
+plot(shap_many_obj, kind = "beeswarm")
+```
+
+<img src="man/figures/README-interpret-shap-beeswarm-1.png" alt="" width="100%" />
+
+Other supported methods include ICE, local explanations, surrogate
+models, and interaction diagnostics.
 
 ## Inspect calibration
 
@@ -431,6 +499,46 @@ plot(calibration_obj)
 ```
 
 <img src="man/figures/README-calibration-1.png" alt="" width="100%" />
+
+## Decision curve analysis
+
+`interpret(method = "dca")` reports net benefit across risk thresholds
+against the “treat all” and “treat none” strategies (Vickers and Elkin,
+2006).
+
+``` r
+dca_obj <- interpret(
+  fit = fit_obj,
+  data = demo_dat,
+  method = "dca"
+)
+
+plot(dca_obj)
+```
+
+<img src="man/figures/README-interpret-dca-1.png" alt="" width="100%" />
+
+## ROC curve and AUC confidence interval
+
+`roc_curve()` and `auc_ci()` are standalone metric functions (backed by
+`pROC`) for a full ROC curve and a DeLong or bootstrap confidence
+interval on AUC.
+
+``` r
+truth_vec <- demo_dat$status
+prob_vec <- predict(fit_obj, demo_dat, type = "prob")[, "Yes"]
+
+roc_obj <- roc_curve(truth_vec, prob_vec)
+plot(roc_obj)
+```
+
+<img src="man/figures/README-roc-curve-1.png" alt="" width="100%" />
+
+``` r
+auc_ci(truth_vec, prob_vec)
+#>      auc conf_low conf_high conf_level method
+#> 1 0.8056   0.7929    0.8183       0.95 delong
+```
 
 ## Estimate causal effects
 
@@ -456,6 +564,11 @@ est_obj
 #> Treatment: smoke (Yes vs No)
 #> Estimate: 0.0897 | SE: 0.0006 | 95% normal CI [0.0886, 0.0908]
 ```
+
+By default, `plot()` shows the model-implied potential outcome
+distributions under treatment and control, with dashed lines marking the
+corresponding means. The unit-level effect histogram remains available
+with `plot(est_obj, style = "effects")`.
 
 ``` r
 plot(est_obj)
@@ -516,20 +629,24 @@ see `CONTRIBUTING.md`.
 
 ## Citation
 
-If you use `funcml` in your work, cite the repository using GitHub’s
-`Cite this repository` panel or the metadata in `CITATION.cff`.
+If you use `funcml` in your work, please cite it.
 
-APA:
-
-    El Badisy, I. (2026). funcml (Version 0.7.1) [Computer software]. https://github.com/ielbadisy/funcml
-
-BibTeX:
-
-    @software{El_Badisy_funcml_2026, author = {El Badisy, Imad}, 
-    license = {GPL-3.0-only},
-    month = apr,
-    title = {{funcml}},
-    url = {https://github.com/ielbadisy/funcml},
-    version = {0.7.1},
-    year = {2026}
-    }
+``` r
+pkgload::unload("funcml")
+library(funcml)
+citation("funcml")
+#> To cite package 'funcml' in publications use:
+#> 
+#>   El Badisy I (2026). _funcml: Functional Machine Learning Framework_.
+#>   R package version 0.8.9, <https://github.com/ielbadisy/funcml>.
+#> 
+#> A BibTeX entry for LaTeX users is
+#> 
+#>   @Manual{,
+#>     title = {funcml: Functional Machine Learning Framework},
+#>     author = {Imad {El Badisy}},
+#>     year = {2026},
+#>     note = {R package version 0.8.9},
+#>     url = {https://github.com/ielbadisy/funcml},
+#>   }
+```

@@ -105,7 +105,7 @@ evaluate <- function(data, formula, model = NULL, spec = NULL,
     )
   }, ncores = ncores)
 
-  folds_df <- do.call(rbind, folds_out)
+  folds_df <- .rbind_dt(folds_out)
   # Aggregate fold metrics into mean/sd columns explicitly to avoid the
   # list/matrix column shape that `aggregate()` produces when the function
   # returns a vector. The previous approach created a 2-column matrix inside a
@@ -132,6 +132,7 @@ evaluate <- function(data, formula, model = NULL, spec = NULL,
 #'
 #' @param x A `funcml_eval` object.
 #' @param object A `funcml_eval` object.
+#' @param digits Number of digits numeric columns are rounded to when printed.
 #' @param ... Additional arguments passed to the underlying method.
 #' @return `print()` and `summary()` return the input object or summary
 #'   table invisibly. `plot()` returns a `ggplot2` object.
@@ -150,16 +151,16 @@ evaluate <- function(data, formula, model = NULL, spec = NULL,
 #' summary(eval_obj)
 #' plot(eval_obj)
 #' @export
-print.funcml_eval <- function(x, ...) {
+print.funcml_eval <- function(x, digits = 4L, ...) {
   cat(sprintf("<funcml_eval> model: %s | task: %s\n", x$model, x$task))
-  print(x$summary)
+  print(.round_numeric_df(x$summary, digits = digits))
   invisible(x)
 }
 
 #' @rdname evaluate-methods
 #' @export
-summary.funcml_eval <- function(object, ...) {
-  print(object$summary)
+summary.funcml_eval <- function(object, digits = 4L, ...) {
+  print(.round_numeric_df(object$summary, digits = digits))
   invisible(object$summary)
 }
 
@@ -187,11 +188,10 @@ plot.funcml_eval <- function(x, ...) {
       mapping = ggplot2::aes(x = conf_low, xend = conf_high, y = metric, yend = metric),
       inherit.aes = FALSE,
       linewidth = 0.45,
-      colour = "#2b8cbe"
+      colour = .funcml_palette$accent
     ) +
     ggplot2::labs(x = "Cross-validated metric value", y = NULL, title = "Cross-validation performance") +
-    ggplot2::theme_bw() +
-    ggplot2::theme(panel.grid.minor = ggplot2::element_blank())
+    theme_funcml()
 }
 
 .summarize_metric_uncertainty <- function(folds_df, conf_level = 0.95) {
@@ -216,5 +216,5 @@ plot.funcml_eval <- function(x, ...) {
       stringsAsFactors = FALSE
     )
   })
-  do.call(rbind, out)
+  .rbind_dt(out)
 }

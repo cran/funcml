@@ -1,8 +1,8 @@
 #' Fit a model using the funcml interface.
 #'
 #' Registered learner ids currently include:
-#' regression and classification: `glm`, `rpart`, `glmnet`, `ranger`, `nnet`,
-#' `e1071_svm`, `randomForest`, `gbm`, `kknn`, `ctree`, `cforest`,
+#' regression and classification: `glm`, `rpart`, `glmnet`, `ranger`, `nnet`, `mlp`,
+#' `densemlp`, `e1071_svm`, `randomForest`, `gbm`, `kknn`, `ctree`, `cforest`,
 #' `lightgbm`, `xgboost`, `stacking`, `superlearner`;
 #' regression plus binary classification: `gam`, `bart`;
 #' classification only: `C50`, `naivebayes`, `fda`, `lda`, `qda`;
@@ -34,6 +34,10 @@ fit <- function(formula, data, model, spec = NULL, seed = NULL, na_action = stat
   if (!task %in% adapter$tasks) stop(sprintf("Model '%s' does not support %s.", model, task), call. = FALSE)
   if (identical(task, "classification") && length(encoded$levels) > 2L && !isTRUE(adapter$supports$multiclass)) {
     stop(sprintf("Model '%s' does not support multiclass classification.", model), call. = FALSE)
+  }
+  engine_pkg <- adapter$package %||% NA_character_
+  if (!is.na(engine_pkg) && !identical(engine_pkg, "stats")) {
+    assert_package(engine_pkg, model)
   }
 
   spec_full <- merge_spec(adapter$defaults, spec, list(...))
@@ -83,8 +87,8 @@ create_predict <- function(obj, adapter, state) {
 #' Available learners.
 #'
 #' `learners()` returns the registry keys accepted by [fit()]. Task support is:
-#' regression and classification: `glm`, `rpart`, `glmnet`, `ranger`, `nnet`,
-#' `e1071_svm`, `randomForest`, `gbm`, `kknn`, `ctree`, `cforest`,
+#' regression and classification: `glm`, `rpart`, `glmnet`, `ranger`, `nnet`, `mlp`,
+#' `densemlp`, `e1071_svm`, `randomForest`, `gbm`, `kknn`, `ctree`, `cforest`,
 #' `lightgbm`, `xgboost`, `stacking`, `superlearner`;
 #' regression plus binary classification: `gam`, `bart`, `earth`;
 #' classification only: `C50`, `naivebayes`, `fda`, `lda`, `qda`;
@@ -108,6 +112,8 @@ learners <- function() {
     glmnet = "glmnet",
     ranger = "ranger",
     nnet = "nnet",
+    mlp = "torch",
+    densemlp = "densemlp",
     e1071_svm = "e1071",
     randomForest = "randomForest",
     gbm = "gbm",
@@ -134,9 +140,22 @@ learners <- function() {
 .interpret_methods_for <- function(adapter) {
   methods <- c("vip", "permute", "pdp", "ice", "ale", "local", "lime", "shap", "interaction", "surrogate")
   if ("classification" %in% adapter$tasks) {
-    methods <- c(methods, "calibration")
+    methods <- c(methods, "calibration", "dca")
   }
   paste(methods, collapse = ", ")
+}
+
+.learner_engine_available <- function(id, engine_pkg) {
+  if (is.na(engine_pkg)) {
+    return(TRUE)
+  }
+  if (!requireNamespace(engine_pkg, quietly = TRUE)) {
+    return(FALSE)
+  }
+  if (identical(id, "mlp") || identical(id, "densemlp")) {
+    return(isTRUE(tryCatch(torch::torch_is_installed(), error = function(e) FALSE)))
+  }
+  TRUE
 }
 
 .learner_catalog <- function() {
@@ -148,7 +167,7 @@ learners <- function() {
     adapter <- reg[[id]]
     engine_pkg <- unname(pkg_map[[id]] %||% NA_character_)
     has_tune <- TRUE
-    available <- if (is.na(engine_pkg)) TRUE else requireNamespace(engine_pkg, quietly = TRUE)
+    available <- .learner_engine_available(id, engine_pkg)
 
     data.frame(
       learner = id,
@@ -172,7 +191,7 @@ learners <- function() {
     )
   })
 
-  out <- do.call(rbind, rows)
+  out <- .rbind_dt(rows)
   rownames(out) <- NULL
   out[order(out$learner), , drop = FALSE]
 }

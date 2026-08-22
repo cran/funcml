@@ -87,7 +87,7 @@ tune <- function(data, formula, model, grid, resampling = cv(5),
       conf_high = summary_row$conf_high
     )
   }, ncores = ncores)
-  results_df <- do.call(rbind, lapply(results, function(x) as.data.frame(as.list(x), stringsAsFactors = FALSE)))
+  results_df <- .rbind_dt(lapply(results, function(x) as.data.frame(as.list(x), stringsAsFactors = FALSE)))
   best_idx <- if (dirs == "min") which.min(results_df$mean) else which.max(results_df$mean)
   best_spec <- as.list(search_grid[best_idx, , drop = FALSE])
   fit_best <- fit(formula, data, model, spec = best_spec, ...)
@@ -134,6 +134,7 @@ metric_direction <- function(metric) {
 #'
 #' @param x A `funcml_tune` object.
 #' @param object A `funcml_tune` object.
+#' @param digits Number of digits numeric columns are rounded to when printed.
 #' @param ... Additional arguments passed to the underlying method.
 #' @return `print()` and `summary()` return the input object or results table
 #'   invisibly. `plot()` returns a `ggplot2` object.
@@ -153,21 +154,21 @@ metric_direction <- function(metric) {
 #' summary(tune_obj)
 #' plot(tune_obj)
 #' @export
-print.funcml_tune <- function(x, ...) {
+print.funcml_tune <- function(x, digits = 4L, ...) {
   cat(sprintf("<funcml_tune> metric=%s direction=%s search=%s\n", x$metric, x$direction, x$search))
   cat("Best:\n")
-  print(x$best)
+  print(.round_numeric_df(x$best, digits = digits))
   if (!is.null(x$nested)) {
     cat("Nested resampling:\n")
-    print(x$nested$summary)
+    print(.round_numeric_df(x$nested$summary, digits = digits))
   }
   invisible(x)
 }
 
 #' @rdname tune-methods
 #' @export
-summary.funcml_tune <- function(object, ...) {
-  print(object$results)
+summary.funcml_tune <- function(object, digits = 4L, ...) {
+  print(.round_numeric_df(object$results, digits = digits))
   invisible(object$results)
 }
 
@@ -183,14 +184,13 @@ plot.funcml_tune <- function(x, ...) {
   ggplot2::ggplot(df, ggplot2::aes(x = mean, y = config_label)) +
     ggplot2::geom_segment(ggplot2::aes(x = conf_low, xend = conf_high, yend = config_label), linewidth = 0.45, colour = "#2b8cbe") +
     ggplot2::geom_point(size = 2.2, colour = "black") +
-    ggplot2::geom_point(data = df[df$config_label == best_label, , drop = FALSE], size = 2.8, colour = "#2b8cbe") +
+    ggplot2::geom_point(data = df[df$config_label == best_label, , drop = FALSE], size = 2.8, colour = .funcml_palette$accent) +
     ggplot2::labs(
       x = sprintf("%s (%s)", toupper(x$metric), x$direction),
       y = NULL,
       title = sprintf("%s search results", tools::toTitleCase(x$search))
     ) +
-  ggplot2::theme_bw() +
-  ggplot2::theme(panel.grid.minor = ggplot2::element_blank())
+  theme_funcml()
 }
 
 .nested_resampling_summary <- function(data, formula, model, grid, resampling,
@@ -246,7 +246,7 @@ plot.funcml_tune <- function(x, ...) {
       stringsAsFactors = FALSE
     )
   }, ncores = ncores)
-  outer_folds <- do.call(rbind, outer_folds)
+  outer_folds <- .rbind_dt(outer_folds)
   list(
     folds = outer_folds,
     summary = .summarize_metric_uncertainty(outer_folds),

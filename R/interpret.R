@@ -256,15 +256,8 @@ list_interpretability_methods <- function(has_plot = NULL, columns = NULL) {
 }
 
 .publication_theme <- function() {
-  ggplot2::theme_bw() +
-    ggplot2::theme(
-      panel.grid.minor = ggplot2::element_blank(),
-      panel.grid.major.x = ggplot2::element_line(colour = "grey88", linewidth = 0.3),
-      panel.grid.major.y = ggplot2::element_blank(),
-      strip.background = ggplot2::element_rect(fill = "grey95", colour = "grey80"),
-      plot.title = ggplot2::element_text(face = "bold"),
-      legend.title = ggplot2::element_text(face = "bold")
-    )
+  theme_funcml() +
+    ggplot2::theme(legend.title = ggplot2::element_text(face = "bold"))
 }
 
 .prediction_axis_label <- function(task, type, context = c("prediction", "pdp", "ice", "ale")) {
@@ -309,50 +302,9 @@ list_interpretability_methods <- function(has_plot = NULL, columns = NULL) {
   if (!length(rows)) {
     return(NULL)
   }
-  out <- do.call(rbind, rows)
+  out <- .rbind_dt(rows)
   rownames(out) <- NULL
   out
-}
-
-.as_shapviz_object <- function(df, S_inter = NULL) {
-  obs_ids <- sort(unique(df$observation))
-  features <- unique(df$feature)
-  shap_mat <- sapply(features, function(feat) {
-    vals <- df[df$feature == feat, c("observation", "shap"), drop = FALSE]
-    vals <- vals[match(obs_ids, vals$observation), "shap"]
-    as.numeric(vals)
-  })
-  if (!is.matrix(shap_mat)) {
-    shap_mat <- matrix(shap_mat, ncol = length(features))
-  }
-  colnames(shap_mat) <- features
-  rownames(shap_mat) <- obs_ids
-
-  X <- data.frame(row.names = obs_ids, stringsAsFactors = FALSE)
-  for (feat in features) {
-    vals <- df[df$feature == feat, c("observation", "raw_value", "feature_value"), drop = FALSE]
-    vals <- vals[match(obs_ids, vals$observation), , drop = FALSE]
-    if (all(!is.na(vals$raw_value))) {
-      X[[feat]] <- as.numeric(vals$raw_value)
-    } else {
-      X[[feat]] <- vals$feature_value
-    }
-  }
-  baseline <- df[df$feature == features[1], c("observation", "baseline"), drop = FALSE]
-  baseline <- baseline[match(obs_ids, baseline$observation), "baseline"]
-  shapviz::shapviz(
-    shap_mat,
-    X = X,
-    baseline = mean(as.numeric(baseline)),
-    S_inter = S_inter
-  )
-}
-
-.funcml_shapviz_style <- function(plot_obj) {
-  if (inherits(plot_obj, "ggplot")) {
-    return(plot_obj + .publication_theme())
-  }
-  plot_obj
 }
 
 .format_tune_config <- function(df, exclude = c("mean", "sd", "n", "std_error", "conf_level", "conf_low", "conf_high")) {
@@ -457,6 +409,12 @@ list_interpretability_methods <- function(has_plot = NULL, columns = NULL) {
 #' @param seed Optional seed for determinism.
 #' @param bins Number of bins for calibration diagnostics.
 #' @param strategy Binning strategy for calibration diagnostics.
+#' @param ncores Optional number of CPU cores used to parallelize the
+#'   per-observation SHAP computation (`method = "shap"`). `NULL` or `1`
+#'   runs sequentially. Ignored by other methods, and ignored (with a
+#'   warning) for `xgboost`, `lightgbm`, `mlp`, `densemlp`, and `bart`
+#'   fits on Unix, since reusing their fitted state across a forked
+#'   process is unsafe.
 #' @param ... Additional method-specific args.
 #' @return An interpretation object whose class depends on `method`.
 #'   Returned objects contain computed explanation values and metadata used
@@ -481,7 +439,7 @@ list_interpretability_methods <- function(has_plot = NULL, columns = NULL) {
 interpret <- function(fit, data, formula = fit$formula,
                       method = c("vip", "permute", "pdp", "ice", "ale", "local", "lime", "shap",
                                  "local_model", "interaction", "surrogate",
-                                 "profile", "ceteris_paribus", "calibration"),
+                                 "profile", "ceteris_paribus", "calibration", "dca"),
                       features = NULL, type = NULL, metric = NULL,
                       importance_type = c("permute", "model", "auto"),
                       compare = c("difference", "ratio"),
@@ -490,10 +448,11 @@ interpret <- function(fit, data, formula = fit$formula,
                       gower_power = NULL,
                       class_level = NULL, pos_level = NULL, newdata = NULL,
                       nsim = NULL, nsamples = NULL, grid = NULL, seed = NULL,
-                      bins = 10, strategy = c("quantile", "uniform"), ...) {
+                      bins = 10, strategy = c("quantile", "uniform"), ncores = NULL, ...) {
   if (!inherits(fit, "funcml_fit")) {
     stop("fit must be a funcml_fit.", call. = FALSE)
   }
+  ncores <- .validate_ncores(ncores)
   type_missing <- missing(type)
   nsamples_missing <- missing(nsamples)
   method <- match.arg(method)
@@ -559,7 +518,8 @@ interpret <- function(fit, data, formula = fit$formula,
     interaction = interpret_interaction,
     surrogate = interpret_surrogate,
     profile = interpret_profile,
-    calibration = interpret_calibration
+    calibration = interpret_calibration,
+    dca = interpret_dca
   )
 
   result <- dispatcher(
@@ -569,6 +529,7 @@ interpret <- function(fit, data, formula = fit$formula,
     seed = seed, features_was_null = features_was_null, type_missing = type_missing,
     importance_type = importance_type, compare = compare, keep = keep,
     k = k, gower_power = gower_power, bins = bins, strategy = strategy,
+    ncores = ncores,
     ...
   )
   parsed <- .as_interpret_result(result)
@@ -762,7 +723,7 @@ interpret_pdp <- function(fit, data, features, type, class_level, pos_level, gri
     }, numeric(1))
     data.frame(feature = feat, value = values, yhat = yhat, stringsAsFactors = FALSE)
   })
-  curves <- do.call(rbind, curves)
+  curves <- .rbind_dt(curves)
   rownames(curves) <- NULL
   .interpret_result(
     payload = list(curves = curves, grid = grid, support = .support_frame(data_use, features)),
@@ -796,9 +757,9 @@ interpret_ice <- function(fit, data, features, type, class_level, pos_level, gri
       }
       data.frame(id = i, feature = feat, value = values, yhat = preds, stringsAsFactors = FALSE)
     })
-    do.call(rbind, out)
+    .rbind_dt(out)
   })
-  curves <- do.call(rbind, curves)
+  curves <- .rbind_dt(curves)
   rownames(curves) <- NULL
   .interpret_result(
     payload = list(curves = curves, grid = grid, support = .support_frame(data_use, features)),
@@ -845,7 +806,7 @@ interpret_ale <- function(fit, data, features, type, class_level, pos_level, gri
     data.frame(feature = feat, value = mids, effect = centered, stringsAsFactors = FALSE)
   })
   out <- Filter(Negate(is.null), out)
-  curves <- if (length(out)) do.call(rbind, out) else data.frame(feature = character(), value = numeric(), effect = numeric())
+  curves <- if (length(out)) .rbind_dt(out) else data.frame(feature = character(), value = numeric(), effect = numeric())
   .interpret_result(
     payload = list(curves = curves, grid = grid, support = .support_frame(data_use, features)),
     diagnostics = list(reference = "native ALE")
@@ -920,7 +881,8 @@ interpret_local_model <- function(fit, data, features, type, class_level, pos_le
 }
 
 interpret_shap <- function(fit, data, features, type, class_level, pos_level, newdata, nsim, nsamples,
-                           seed = NULL, baseline = NULL, ...) {
+                           seed = NULL, baseline = NULL, ncores = NULL, ...) {
+  ncores <- .safe_ncores_for_fit(fit, ncores)
   if (is.null(newdata)) {
     newdata <- data[1, , drop = FALSE]
   }
@@ -933,7 +895,13 @@ interpret_shap <- function(fit, data, features, type, class_level, pos_level, ne
     .predict_numeric_target(fit, df, type = type, class_level = class_level, pos_level = pos_level)
   }
 
-  rows <- lapply(seq_len(nrow(newdata)), function(obs_id) {
+  obs_ids <- seq_len(nrow(newdata))
+  obs_seeds <- .task_seeds(seed, length(obs_ids))
+  rows <- .funcml_map(obs_ids, function(obs_id) {
+    task_seed <- obs_seeds[[obs_id]]
+    if (!is.null(task_seed)) {
+      set.seed(task_seed)
+    }
     x_interest <- newdata[obs_id, , drop = FALSE]
     pred_interest <- pred_one(x_interest)[1]
     contrib <- matrix(0, nrow = nsim, ncol = length(features), dimnames = list(NULL, features))
@@ -969,8 +937,8 @@ interpret_shap <- function(fit, data, features, type, class_level, pos_level, ne
       feature_label = vapply(features, function(feat) .feature_display_label(feat, x_interest[[feat]][1]), character(1)),
       stringsAsFactors = FALSE
     )
-  })
-  result <- do.call(rbind, rows)
+  }, ncores = ncores)
+  result <- .rbind_dt(rows)
   rownames(result) <- NULL
   .interpret_result(
     payload = result,
@@ -1127,7 +1095,7 @@ interpret_interaction <- function(fit, data, features, type, class_level, pos_le
     )
   } else {
     pair_grid <- utils::combn(features, 2, simplify = FALSE)
-    pairwise <- do.call(rbind, lapply(pair_grid, function(pair) {
+    pairwise <- .rbind_dt(lapply(pair_grid, function(pair) {
       val <- .interaction_pair(fit, data_use, pair[1], pair[2], type, class_level, pos_level, grid_size)
       data.frame(feature_x = pair[1], feature_y = pair[2], interaction = val, stringsAsFactors = FALSE)
     }))
@@ -1210,6 +1178,36 @@ interpret_calibration <- function(fit, data, type, class_level, pos_level, bins 
       reference = "native calibration diagnostics",
       bins = bins,
       strategy = strategy,
+      positive = positive
+    )
+  )
+}
+
+interpret_dca <- function(fit, data, type, class_level, pos_level, ...) {
+  if (fit$task != "classification") {
+    stop("Decision curve analysis is available only for classification models.", call. = FALSE)
+  }
+  if (length(fit$levels) != 2L) {
+    stop("Decision curve analysis is currently implemented for binary classification only.", call. = FALSE)
+  }
+  dots <- list(...)
+  thresholds <- dots$thresholds %||% seq(0.01, 0.99, by = 0.01)
+  positive <- class_level %||% pos_level %||% fit$levels[2L]
+  truth <- stats::model.response(stats::model.frame(fit$formula, data))
+  prob_matrix <- .normalize_prob_matrix(
+    predict(fit, data, type = "prob", class_level = positive, pos_level = pos_level),
+    fit$levels
+  )
+  prob <- prob_matrix[, positive]
+  curve <- dca(truth, prob, positive = positive, thresholds = thresholds)
+  .interpret_result(
+    payload = list(
+      curve = curve,
+      positive = positive,
+      prevalence = mean(as.integer(factor(truth, levels = fit$levels) == positive))
+    ),
+    diagnostics = list(
+      reference = "Vickers and Elkin (2006) decision curve analysis",
       positive = positive
     )
   )
@@ -1369,6 +1367,9 @@ plot.funcml_pdp <- function(x, ...) {
       title = "Partial dependence plot"
     ) +
     .publication_theme()
+  if (x$task != "regression" && identical(x$type, "prob")) {
+    p <- p + ggplot2::coord_cartesian(ylim = c(0, 1))
+  }
   if (!is.null(support)) {
     p <- p + ggplot2::geom_rug(
       data = support,
@@ -1611,9 +1612,15 @@ summary.funcml_local <- function(object, ...) {
 plot.funcml_iml_local_model <- function(x, ...) {
   df <- x$result$results
   df$feature <- factor(df$feature.value, levels = rev(df$feature.value))
+  df$hjust <- ifelse(df$effect >= 0, -0.15, 1.15)
   ggplot2::ggplot(df, ggplot2::aes(x = effect, y = feature, fill = effect >= 0)) +
     ggplot2::geom_vline(xintercept = 0, colour = "grey75", linewidth = 0.4) +
     ggplot2::geom_col(width = 0.7, colour = NA, show.legend = FALSE) +
+    ggplot2::geom_text(
+      ggplot2::aes(label = sprintf("%+.3f", effect), hjust = hjust),
+      size = 3.1, colour = "grey20"
+    ) +
+    ggplot2::scale_x_continuous(expand = ggplot2::expansion(mult = 0.18)) +
     ggplot2::scale_fill_manual(values = c(`TRUE` = "#2ca25f", `FALSE` = "#de2d26")) +
     ggplot2::labs(
       x = "Approximate local contribution",
@@ -1659,6 +1666,7 @@ summary.funcml_iml_local_model <- function(object, ...) {
 #' @param x A `funcml_calibration` object.
 #' @param object A `funcml_calibration` object.
 #' @param style Plot style: `"curve"` or `"histogram"`.
+#' @param digits Number of digits numeric columns are rounded to when printed.
 #' @param ... Additional arguments passed to the underlying method.
 #' @return `plot()` returns a `ggplot2` object. `print()` returns the input
 #'   object invisibly. `summary()` returns a list with calibration curve and
@@ -1718,19 +1726,19 @@ plot.funcml_calibration <- function(x, style = c("curve", "histogram"), ...) {
 
 #' @rdname interpret-calibration-methods
 #' @export
-print.funcml_calibration <- function(x, ...) {
+print.funcml_calibration <- function(x, digits = 4L, ...) {
   cat("<funcml_calibration>\n")
-  print(x$result$curve)
+  print(.round_numeric_df(x$result$curve, digits = digits))
   invisible(x)
 }
 
 #' @rdname interpret-calibration-methods
 #' @export
-summary.funcml_calibration <- function(object, ...) {
+summary.funcml_calibration <- function(object, digits = 4L, ...) {
   out <- list(
-    curve = object$result$curve,
-    ece = object$result$ece,
-    mce = object$result$mce,
+    curve = .round_numeric_df(object$result$curve, digits = digits),
+    ece = round(object$result$ece, digits = digits),
+    mce = round(object$result$mce, digits = digits),
     positive = object$result$positive
   )
   print(out)
@@ -1747,10 +1755,12 @@ summary.funcml_calibration <- function(object, ...) {
 #' @param kind Plot kind. One of `"auto"`, `"waterfall"`, `"force"`,
 #'   `"summary"`, `"beeswarm"`, `"importance"`, `"bar"`, `"dependence"`,
 #'   `"dependence2d"`, or `"interaction"`.
-#' @param ... Additional arguments passed to the underlying method.
-#' @return `plot()` returns a visualization object (typically a `ggplot2`
-#'   object) from `shapviz`. `print()` returns the input object invisibly.
-#'   `summary()` returns the SHAP contribution table invisibly.
+#' @param ... Additional arguments passed to the underlying method. For
+#'   `kind = "summary"`/`"beeswarm"`, `v` restricts the plot to a single
+#'   feature (default: all interpreted features).
+#' @return `plot()` returns a `ggplot2` object. `print()` returns the input
+#'   object invisibly. `summary()` returns the SHAP contribution table
+#'   invisibly.
 #'
 #' @name interpret-shap-methods
 #' @aliases plot.funcml_shap print.funcml_shap summary.funcml_shap
@@ -1775,52 +1785,25 @@ plot.funcml_shap <- function(x, kind = c("auto", "waterfall", "force", "summary"
   if (kind == "auto") {
     kind <- if (length(unique(df$observation)) > 1L) "summary" else "waterfall"
   }
-  need_interactions <- identical(kind, "interaction") || isTRUE(dots$interactions)
+  need_interactions <- identical(kind, "interaction") || identical(kind, "dependence2d") || isTRUE(dots$interactions)
   s_inter <- if (need_interactions) .funcml_shap_interaction_array(x, nsim = dots$nsim %||% NULL, seed = dots$seed %||% x$seed) else NULL
-  sv <- .as_shapviz_object(df, S_inter = s_inter)
+
   if (kind == "waterfall") {
-    plot_obj <- shapviz::sv_waterfall(
-      sv,
-      row_id = dots$row_id %||% min(df$observation),
-      fill_colors = c("#2ca25f", "#de2d26")
-    )
-    return(.funcml_shapviz_style(plot_obj))
+    return(shap_plot_waterfall(df, row_id = dots$row_id %||% min(df$observation)))
   }
   if (kind == "force") {
-    plot_obj <- shapviz::sv_force(
-      sv,
-      row_id = dots$row_id %||% min(df$observation),
-      fill_colors = c("#2ca25f", "#de2d26")
-    )
-    return(.funcml_shapviz_style(plot_obj))
+    return(shap_plot_force(df, row_id = dots$row_id %||% min(df$observation)))
   }
   if (kind %in% c("summary", "beeswarm")) {
-    plot_obj <- shapviz::sv_importance(
-      sv,
-      kind = "beeswarm",
-      show_numbers = FALSE
-    )
-    return(.funcml_shapviz_style(plot_obj))
+    return(shap_plot_beeswarm(df, v = dots$v %||% NULL))
   }
   if (kind %in% c("importance", "bar")) {
-    plot_obj <- shapviz::sv_importance(
-      sv,
-      kind = "bar",
-      show_numbers = FALSE,
-      fill = "grey35"
-    )
-    return(.funcml_shapviz_style(plot_obj))
+    return(shap_plot_importance(df))
   }
   if (kind == "dependence") {
     v <- dots$v %||% x$features[1]
     color_var <- dots$color_var %||% "auto"
-    plot_obj <- shapviz::sv_dependence(
-      sv,
-      v = v,
-      color_var = color_var,
-      interactions = isTRUE(dots$interactions)
-    )
-    return(.funcml_shapviz_style(plot_obj))
+    return(shap_plot_dependence(df, v = v, color_var = color_var, features = x$features))
   }
   if (kind == "dependence2d") {
     x_var <- dots$feature_x %||% dots$x %||% x$features[1]
@@ -1828,19 +1811,9 @@ plot.funcml_shap <- function(x, kind = c("auto", "waterfall", "force", "summary"
     if (identical(x_var, y_var)) {
       stop("`x` and `y` must refer to two different features for `kind = \"dependence2d\"`.", call. = FALSE)
     }
-    plot_obj <- shapviz::sv_dependence2D(
-      sv,
-      x = x_var,
-      y = y_var,
-      interactions = isTRUE(dots$interactions)
-    )
-    return(.funcml_shapviz_style(plot_obj))
+    return(shap_plot_dependence2d(df, x_var = x_var, y_var = y_var, s_inter = s_inter))
   }
-  plot_obj <- shapviz::sv_interaction(
-    sv,
-    kind = dots$interaction_kind %||% "bar"
-  )
-  .funcml_shapviz_style(plot_obj)
+  shap_plot_interaction(s_inter, kind = dots$interaction_kind %||% "bar")
 }
 
 #' @rdname interpret-shap-methods
