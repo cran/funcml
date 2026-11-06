@@ -60,7 +60,7 @@ test_that("classification interpretability supports subsetted features", {
   expect_true(all(grepl(" = ", sh$result$feature_label, fixed = TRUE)))
 })
 
-test_that("vip always uses internal permutation importance", {
+test_that("vip importance_type selects native or permutation importance", {
   set.seed(21)
   dat <- data.frame(
     x1 = rnorm(90),
@@ -71,26 +71,49 @@ test_that("vip always uses internal permutation importance", {
 
   fit_obj <- fit(y ~ x1 + x2 + x3, data = dat, model = "rpart")
 
-  vip_auto <- interpret(
-    fit_obj,
-    dat,
-    method = "vip",
-    importance_type = "auto",
-    nsim = 6,
-    seed = 5
-  )
-  vip_model <- interpret(
-    fit_obj,
-    dat,
-    method = "vip",
-    importance_type = "model",
-    nsim = 6,
-    seed = 5
-  )
+  vip_auto <- interpret(fit_obj, dat, method = "vip", importance_type = "auto")
+  vip_model <- interpret(fit_obj, dat, method = "vip", importance_type = "model")
+  vip_perm <- interpret(fit_obj, dat, method = "vip", nsim = 6, seed = 5)
 
   expect_equal(vip_auto$result$scores, vip_model$result$scores)
-  expect_equal(vip_auto$diagnostics$engine, "permute")
-  expect_equal(vip_model$diagnostics$engine, "permute")
+  expect_equal(vip_model$diagnostics$engine, "model")
+  expect_equal(vip_perm$diagnostics$engine, "permute")
+  native <- fit_obj$state$state$variable.importance
+  expect_equal(
+    vip_model$result$scores$importance[match(names(native), vip_model$result$scores$feature)],
+    unname(native)
+  )
+  expect_equal(vip_model$result$scores$feature[1], "x1")
+
+  glm_fit <- fit(y ~ x1 + x2 + x3, data = dat, model = "glm")
+  expect_equal(
+    interpret(glm_fit, dat, method = "vip", importance_type = "auto", seed = 1)$diagnostics$engine,
+    "permute"
+  )
+  expect_error(
+    interpret(glm_fit, dat, method = "vip", importance_type = "model"),
+    "no native importance"
+  )
+})
+
+test_that("vip native importance sums dummy-coded factor levels per feature", {
+  skip_if_not_installed("ranger")
+  set.seed(22)
+  dat <- data.frame(
+    x1 = rnorm(120),
+    grp = factor(sample(c("a b", "c-d", "e"), 120, replace = TRUE))
+  )
+  dat$y <- dat$x1 + (dat$grp == "e") + rnorm(120, sd = 0.3)
+
+  fit_obj <- fit(y ~ x1 + grp, data = dat, model = "ranger", spec = list(num.trees = 50))
+  vip <- interpret(fit_obj, dat, method = "vip", importance_type = "model")
+  native <- ranger::importance(fit_obj$state$state)
+
+  expect_setequal(vip$result$scores$feature, c("x1", "grp"))
+  expect_equal(
+    vip$result$scores$importance[vip$result$scores$feature == "grp"],
+    sum(native[grepl("^grp", names(native))])
+  )
 })
 
 test_that("ICE handles vectorized feature grids for numeric predictors", {
@@ -173,4 +196,97 @@ test_that("calibration interpretability returns curve and calibration errors", {
   expect_equal(nrow(cal$result$curve), 6)
   expect_true(is.finite(cal$result$ece))
   expect_true(is.finite(cal$result$mce))
+})
+
+test_that("interaction runs when interpret() forwards its grid argument", {
+  set.seed(61)
+  dat <- data.frame(x1 = rnorm(150), x2 = factor(sample(c("a", "b"), 150, TRUE)))
+  dat$y <- factor(ifelse(runif(150) < stats::plogis(dat$x1), "yes", "no"),
+                  levels = c("no", "yes"))
+  fit_obj <- fit(y ~ x1 + x2, data = dat, model = "glm")
+  h <- interpret(fit_obj, dat, method = "interaction", class_level = "yes")
+  expect_s3_class(h, "funcml_interaction")
+  pw <- h$result$pairwise
+  expect_true(is.finite(pw$interaction[pw$feature_x == "x1" & pw$feature_y == "x2"]))
+  expect_true(all(is.finite(h$result$results$interaction)))
+})
+
+test_that("local surrogate explanations handle factor features", {
+  set.seed(62)
+  dat <- data.frame(x1 = rnorm(150), x2 = factor(sample(c("a", "b"), 150, TRUE)))
+  dat$y <- factor(ifelse(runif(150) < stats::plogis(dat$x1 + (dat$x2 == "b")),
+                         "yes", "no"), levels = c("no", "yes"))
+  fit_obj <- fit(y ~ x1 + x2, data = dat, model = "glm")
+  for (m in c("local", "lime", "local_model")) {
+    lm_obj <- interpret(fit_obj, dat, method = m, newdata = dat[1, ],
+                        class_level = "yes", seed = 1)
+    expect_true(nrow(lm_obj$result$results) >= 1)
+    expect_false(any(grepl("`", lm_obj$result$results$feature.value, fixed = TRUE)))
+  }
+})
+
+test_that("ceteris_paribus and local handle mixed factor and numeric features", {
+  set.seed(3)
+  df <- data.frame(
+    y = factor(sample(c("No", "Yes"), 120, TRUE)),
+    g = factor(sample(c("a", "b"), 120, TRUE)),
+    x1 = rnorm(120),
+    x2 = rnorm(120)
+  )
+  fit_obj <- fit(y ~ g + x1 + x2, df, model = "glm")
+  cp <- interpret(fit_obj, df[1:5, ], method = "ceteris_paribus", class_level = "Yes")
+  expect_true(all(c("g", "x1", "x2") %in% cp$result$curves$feature))
+  loc <- interpret(fit_obj, df, method = "local", newdata = df[1, ], k = 3,
+                   class_level = "Yes", seed = 1)
+  expect_true(nrow(loc$result$results) >= 1)
+})
+
+test_that("ceteris_paribus profiles newdata over a grid built from data", {
+  set.seed(4)
+  df <- data.frame(x1 = rnorm(150), x2 = rnorm(150))
+  df$y <- factor(ifelse(df$x1 - df$x2 + rnorm(150) > 0, "Yes", "No"))
+  fit_obj <- fit(y ~ x1 + x2, df, model = "glm")
+  who <- df[7, ]
+  cp <- interpret(fit_obj, df, method = "ceteris_paribus", newdata = who,
+                  features = "x1", grid = list(x1 = c(-1, 0, who$x1, 1)), class_level = "Yes")
+  curves <- cp$result$curves
+  expect_equal(unique(curves$id), 1L)
+  expect_equal(nrow(curves), 4L)
+  p_obs <- predict(fit_obj, who, type = "prob")[, "Yes"]
+  expect_equal(curves$yhat[3], unname(p_obs), tolerance = 1e-8)
+  cp2 <- interpret(fit_obj, df, method = "ceteris_paribus", newdata = df[1:3, ],
+                   features = "x1", class_level = "Yes")
+  expect_equal(sort(unique(cp2$result$curves$id)), 1:3)
+})
+
+test_that("local surrogate contributions are centred and k counts non-zero effects", {
+  set.seed(9)
+  dat <- data.frame(x1 = rbinom(200, 1, 0.4), x2 = rbinom(200, 1, 0.5), x3 = rnorm(200))
+  dat$y <- factor(ifelse(runif(200) < plogis(dat$x1 - dat$x2 + dat$x3), "yes", "no"))
+  fit_obj <- fit(y ~ x1 + x2 + x3, data = dat, model = "glm")
+  who <- data.frame(x1 = 0L, x2 = 0L, x3 = 0.2)
+  loc <- interpret(fit_obj, dat, method = "local", newdata = who, k = 3,
+                   class_level = "yes", seed = 1)
+  res <- loc$result$results
+  expect_equal(nrow(res), 3L)
+  expect_true(all(res$effect != 0))
+  full <- interpret(fit_obj, dat, method = "local", newdata = who, k = 10,
+                    class_level = "yes", seed = 1)$result
+  expect_equal(sum(full$results$effect), full$local_prediction - full$baseline,
+               tolerance = 1e-8)
+  lime <- interpret(fit_obj, dat, method = "lime", newdata = who, k = 3,
+                    class_level = "yes", seed = 1)
+  expect_equal(lime$diagnostics$neighborhood, "perturbation (LIME)")
+  expect_length(lime$result$sample_weights, 1000L)
+  expect_false(isTRUE(all.equal(lime$result$results$beta, res$beta)))
+})
+
+test_that("shap on a ranger classifier does not warn about row names", {
+  skip_if_not_installed("ranger")
+  set.seed(1)
+  d <- data.frame(x1 = rnorm(100), g = factor(sample(c("a", "b"), 100, TRUE)))
+  d$y <- factor(ifelse(d$x1 + rnorm(100) > 0, "yes", "no"))
+  f <- fit(y ~ ., d, model = "ranger")
+  expect_no_warning(interpret(f, d, method = "shap", newdata = d[1:2, ], nsim = 5,
+                              class_level = "yes", seed = 1))
 })

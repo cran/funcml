@@ -390,19 +390,38 @@ list_interpretability_methods <- function(has_plot = NULL, columns = NULL) {
 #' @param features Optional subset of features; defaults to all predictors.
 #' @param type Prediction scale: regression -> "response"; classification -> "prob" or "class".
 #' @param metric Loss/score for importance (reg: rmse/mae/mse/medae/mape/rsq; cls: accuracy/precision/recall/specificity/f1/balanced_accuracy/logloss/brier/ece/mce/auc/auc_weighted).
-#' @param importance_type Importance engine for `method = "vip"`. Internal
-#'   permutation importance is always used; accepted values are retained only
-#'   for backward-compatible argument parsing.
+#' @param importance_type Importance engine for `method = "vip"`:
+#'   `"permute"` (permutation importance, the default), `"model"` (the
+#'   learner's native importance, e.g. impurity for `ranger`; an error for
+#'   learners without one, see `list_learners(importance = TRUE)`), or
+#'   `"auto"` (native importance when available, permutation otherwise).
+#'   Native scores of dummy-coded factor levels are summed per feature.
 #' @param compare How to compare baseline and perturbed performance for
 #'   importance: `"difference"` or `"ratio"`.
 #' @param keep Keep per-repetition raw importance scores when `nsim > 1`.
-#' @param k Sparsity target for local surrogate fits (`method = "local"`,
-#'   `"local_model"`, or `"lime"`).
+#' @param k Number of contributions reported by local surrogate fits
+#'   (`method = "local"`, `"local_model"`, or `"lime"`): the `k` largest
+#'   absolute contributions after dropping zero ones.
+#'
+#' @details
+#' Local surrogates. `"local"` and `"local_model"` are the same method: a
+#' weighted linear model fitted to the predictions on the reference data,
+#' weighted by similarity to `newdata` (`gower_power`). `"lime"` fits the
+#' same surrogate on `nperturb` synthetic points (default 1000) drawn from
+#' the feature marginals of `data` (numeric: normal with the data mean and
+#' sd; categorical: empirical frequencies), weighted by an exponential
+#' kernel on the scaled distance to `newdata` (width `0.75 * sqrt(p)`), as
+#' in LIME. In both, a contribution is `beta * (x - mean(x))`, with the
+#' mean taken over `data` (categorical features are coded 1 when equal to
+#' the level of `newdata`), so the contributions sum to
+#' `local_prediction - baseline`, both returned in `result`.
 #' @param gower_power Exponent applied to native similarity weights when constructing the
 #'   local neighborhood.
 #' @param class_level Target class for multiclass/local prob explanations.
 #' @param pos_level Alias for binary positive class (second level default).
 #' @param newdata Single-row data frame for local/SHAP explanations; defaults to first row of `data`.
+#'   For `method = "ceteris_paribus"`, the observation(s) to profile (one
+#'   profile per row; the grid of each feature is built from `data`).
 #' @param nsim Number of Monte Carlo simulations (importance/SHAP) or repetitions.
 #' @param nsamples Row subsample for speed (reference/background set).
 #' @param grid Optional list of grids per feature for PDP/ICE/ALE.
@@ -509,10 +528,10 @@ interpret <- function(fit, data, formula = fit$formula,
     permute = interpret_vip,
     pdp = interpret_pdp,
     ice = interpret_ice,
-    ceteris_paribus = interpret_ice,
+    ceteris_paribus = interpret_ceteris_paribus,
     ale = interpret_ale,
     local = interpret_local_model,
-    lime = interpret_local_model,
+    lime = interpret_lime,
     local_model = interpret_local_model,
     shap = interpret_shap,
     interaction = interpret_interaction,
@@ -578,6 +597,22 @@ interpret <- function(fit, data, formula = fit$formula,
 interpret_vip <- function(fit, data, features, type, metric, class_level, pos_level,
                           nsim, nsamples, importance_type, compare, keep,
                           type_missing, sample_size = NULL, sample_frac = NULL, ...) {
+  has_native <- isTRUE(fit$adapter$supports$importance) && is.function(fit$adapter$importance)
+  if (importance_type == "auto") {
+    importance_type <- if (has_native) "model" else "permute"
+  }
+  if (importance_type == "model") {
+    if (!has_native) {
+      stop(
+        "Learner `", fit$model, "` has no native importance; use ",
+        "`importance_type = \"permute\"` or a learner from ",
+        "`list_learners(importance = TRUE)`.",
+        call. = FALSE
+      )
+    }
+    return(.interpret_vip_model(fit, data, features))
+  }
+
   if (!is.null(sample_size) && !is.null(sample_frac)) {
     stop("Arguments `sample_size` and `sample_frac` cannot both be specified.", call. = FALSE)
   }
@@ -675,6 +710,59 @@ interpret_vip <- function(fit, data, features, type, metric, class_level, pos_le
   )
 }
 
+.interpret_vip_model <- function(fit, data, features) {
+  encoded <- .encode_train(data = data, formula = fit$formula, na_action = fit$na_action)
+  raw <- fit$adapter$importance(
+    state = fit$state,
+    X = encoded$X,
+    y = encoded$y,
+    feature_names = encoded$features,
+    task = fit$task,
+    levels = fit$levels
+  )
+  # Engines report importance per design-matrix column, possibly under
+  # make.names() spellings; map each column back to its model term so that
+  # dummy-coded factor levels are summed into one score per feature.
+  mf <- stats::model.frame(fit$formula, data = data, na.action = fit$na_action)
+  mm <- stats::model.matrix(encoded$terms, mf, contrasts.arg = encoded$contrasts)
+  col_term <- attr(encoded$terms, "term.labels")[attr(mm, "assign")]
+  col_term <- col_term[match(encoded$features, colnames(mm)[attr(mm, "assign") > 0])]
+  idx <- match(raw$feature, encoded$features)
+  idx[is.na(idx)] <- match(raw$feature[is.na(idx)], make.names(encoded$features, unique = TRUE))
+  raw_term <- col_term[idx]
+  values <- ifelse(is.na(raw$importance), 0, raw$importance)
+  importance <- vapply(features, function(feat) {
+    hit <- !is.na(raw_term) & raw_term == feat
+    if (any(hit)) sum(values[hit]) else 0
+  }, numeric(1))
+  if (all(is.na(raw$importance))) {
+    importance[] <- NA_real_
+  }
+
+  scores <- data.frame(
+    feature = features,
+    importance = unname(importance),
+    std_dev = NA_real_,
+    stringsAsFactors = FALSE
+  )
+  scores <- scores[order(scores$importance, decreasing = TRUE), , drop = FALSE]
+  rownames(scores) <- NULL
+
+  .interpret_result(
+    payload = list(
+      scores = scores,
+      baseline = NA_real_,
+      metric = NULL,
+      comparison = NULL,
+      raw_scores = NULL
+    ),
+    diagnostics = list(
+      reference = "native model importance",
+      engine = "model"
+    )
+  )
+}
+
 .pdp_class_level <- function(fit, class_level, pos_level) {
   class_level %||% pos_level %||% fit$levels[1L]
 }
@@ -703,6 +791,19 @@ interpret_vip <- function(fit, data, features, type, metric, class_level, pos_le
   }
 }
 
+# Curves of numeric and factor features share the `value` column; when
+# both kinds are requested the column is stored as character.
+.harmonise_curve_values <- function(curves) {
+  numeric_value <- vapply(curves, function(x) is.numeric(x$value), logical(1))
+  if (any(numeric_value) && !all(numeric_value)) {
+    curves <- lapply(curves, function(x) {
+      x$value <- as.character(x$value)
+      x
+    })
+  }
+  curves
+}
+
 interpret_pdp <- function(fit, data, features, type, class_level, pos_level, grid, nsamples,
                           grid.resolution = NULL, quantiles = FALSE, probs = 1:9 / 10,
                           trim.outliers = FALSE, ...) {
@@ -723,7 +824,7 @@ interpret_pdp <- function(fit, data, features, type, class_level, pos_level, gri
     }, numeric(1))
     data.frame(feature = feat, value = values, yhat = yhat, stringsAsFactors = FALSE)
   })
-  curves <- .rbind_dt(curves)
+  curves <- .rbind_dt(.harmonise_curve_values(curves))
   rownames(curves) <- NULL
   .interpret_result(
     payload = list(curves = curves, grid = grid, support = .support_frame(data_use, features)),
@@ -759,11 +860,53 @@ interpret_ice <- function(fit, data, features, type, class_level, pos_level, gri
     })
     .rbind_dt(out)
   })
-  curves <- .rbind_dt(curves)
+  curves <- .rbind_dt(.harmonise_curve_values(curves))
   rownames(curves) <- NULL
   .interpret_result(
     payload = list(curves = curves, grid = grid, support = .support_frame(data_use, features)),
     diagnostics = list(reference = "native ICE", centered = isTRUE(center))
+  )
+}
+
+# Ceteris-paribus profiles of the rows of `newdata` (default: first row of
+# `data`). The grid of each feature comes from the reference `data`, so a
+# single observation still gets a full profile.
+interpret_ceteris_paribus <- function(fit, data, features, type, class_level, pos_level, grid,
+                                      nsamples, newdata = NULL, grid.resolution = NULL,
+                                      quantiles = FALSE, probs = 1:9 / 10,
+                                      trim.outliers = FALSE, ...) {
+  if (is.null(newdata)) {
+    newdata <- data[1, , drop = FALSE]
+  }
+  newdata <- as.data.frame(newdata)
+  missing_cols <- setdiff(features, names(newdata))
+  if (length(missing_cols)) {
+    stop("`newdata` is missing feature(s): ", paste(missing_cols, collapse = ", "), call. = FALSE)
+  }
+  curves <- lapply(features, function(feat) {
+    values <- .grid_values(
+      data[[feat]],
+      grid = grid[[feat]],
+      grid.resolution = grid.resolution,
+      quantiles = quantiles,
+      probs = probs,
+      trim.outliers = trim.outliers
+    )
+    out <- lapply(seq_len(nrow(newdata)), function(i) {
+      base_row <- newdata[rep(i, length(values)), , drop = FALSE]
+      base_row[[feat]] <- .coerce_feature_value(data[[feat]], values, length(values))
+      preds <- .pdp_predict_values(fit, base_row, type = type, class_level = class_level, pos_level = pos_level)
+      data.frame(id = i, feature = feat, value = values, yhat = preds, stringsAsFactors = FALSE)
+    })
+    .rbind_dt(out)
+  })
+  curves <- .rbind_dt(.harmonise_curve_values(curves))
+  rownames(curves) <- NULL
+  observed <- .pdp_predict_values(fit, newdata, type = type, class_level = class_level, pos_level = pos_level)
+  .interpret_result(
+    payload = list(curves = curves, grid = grid, support = .support_frame(data, features),
+                   newdata = newdata, observed = observed),
+    diagnostics = list(reference = "native ceteris paribus", n_profiles = nrow(newdata))
   )
 }
 
@@ -813,8 +956,50 @@ interpret_ale <- function(fit, data, features, type, class_level, pos_level, gri
   )
 }
 
+# Draw `n` synthetic rows around the reference data, LIME style: numeric
+# features from N(mean, sd) of `data`, categorical features from their
+# empirical marginal. Non-feature columns are copied from resampled rows.
+.lime_perturb <- function(data, features, n) {
+  out <- data[sample(seq_len(nrow(data)), n, replace = TRUE), , drop = FALSE]
+  for (feat in features) {
+    x <- data[[feat]]
+    if (is.factor(x) || is.character(x) || is.logical(x)) {
+      out[[feat]] <- x[sample(seq_along(x), n, replace = TRUE)]
+    } else {
+      mu <- mean(x, na.rm = TRUE)
+      sdev <- stats::sd(x, na.rm = TRUE)
+      draw <- stats::rnorm(n, mu, if (is.finite(sdev)) sdev else 0)
+      if (is.integer(x)) draw <- as.integer(round(draw))
+      out[[feat]] <- draw
+    }
+  }
+  rownames(out) <- NULL
+  out
+}
+
+# Exponential kernel on the Euclidean distance to x_interest, numeric
+# features scaled by their sd in `ref`, categorical features as 0/1
+# mismatch; kernel width 0.75 * sqrt(p) as in LIME.
+.lime_kernel_weights <- function(X, x_interest, features, ref) {
+  d2 <- Reduce(`+`, lapply(features, function(feat) {
+    x <- X[[feat]]
+    x0 <- x_interest[[feat]]
+    if (is.factor(x) || is.character(x) || is.logical(x)) {
+      as.numeric(as.character(x) != as.character(x0))
+    } else {
+      sdev <- stats::sd(ref[[feat]], na.rm = TRUE)
+      if (!is.finite(sdev) || sdev == 0) sdev <- 1
+      ((as.numeric(x) - as.numeric(x0)) / sdev)^2
+    }
+  }))
+  width <- 0.75 * sqrt(length(features))
+  pmax(exp(-d2 / width^2), .Machine$double.eps)
+}
+
 interpret_local_model <- function(fit, data, features, type, class_level, pos_level, newdata, nsamples,
-                                  k = 3, gower_power = 1, ...) {
+                                  k = 3, gower_power = 1, sampler = c("data", "perturb"),
+                                  nperturb = 1000, ...) {
+  sampler <- match.arg(sampler)
   k <- k %||% 3
   gower_power <- gower_power %||% 1
   if (is.null(newdata)) {
@@ -822,24 +1007,43 @@ interpret_local_model <- function(fit, data, features, type, class_level, pos_le
   }
   x_interest <- newdata[1, features, drop = FALSE]
   data_use <- if (!is.null(nsamples) && nrow(data) > nsamples) data[sample(seq_len(nrow(data)), nsamples), , drop = FALSE] else data
-  X <- data_use[, features, drop = FALSE]
-  yhat <- .predict_numeric_target(fit, data_use, type = type, class_level = class_level, pos_level = pos_level)
+  if (sampler == "perturb") {
+    sample_df <- .lime_perturb(data, features, nperturb)
+    X <- sample_df[, features, drop = FALSE]
+    sample_weights <- .lime_kernel_weights(X, x_interest, features, data)
+    neighborhood <- "perturbation (LIME)"
+  } else {
+    sample_df <- data_use
+    X <- data_use[, features, drop = FALSE]
+    sample_weights <- .local_similarity_weights(X, x_interest, features, power = gower_power)
+    neighborhood <- "similarity"
+  }
+  yhat <- .predict_numeric_target(fit, sample_df, type = type, class_level = class_level, pos_level = pos_level)
   X_recode <- .recode_local_features(X, x_interest)
   x_interest_recode <- .recode_local_features(x_interest[, features, drop = FALSE], x_interest)
-  sample_weights <- .local_similarity_weights(X, x_interest, features, power = gower_power)
+  # contributions are deviations from the average observation of the
+  # reference data, so they sum to local_prediction - baseline
+  ref_means <- colMeans(.recode_local_features(data[, features, drop = FALSE], x_interest), na.rm = TRUE)
   df <- data.frame(.target = yhat, .weights = sample_weights, X_recode, check.names = FALSE)
   model <- stats::lm(.local_formula(colnames(X_recode)), data = df, weights = .weights)
   beta <- stats::coef(model)
   beta[is.na(beta)] <- 0
+  # lm() keeps the backticks of non-syntactic names such as `sex=Male`
+  names(beta) <- gsub("`", "", names(beta), fixed = TRUE)
 
-  feature_names <- names(beta)[names(beta) != "(Intercept)"]
-  if (length(feature_names) > k) {
-    keep_idx <- order(abs(beta[feature_names]), decreasing = TRUE)[seq_len(k)]
-    feature_names <- feature_names[keep_idx]
-  }
-  encoded_values <- unname(as.numeric(x_interest_recode[1, feature_names, drop = TRUE]))
+  all_names <- names(beta)[names(beta) != "(Intercept)"]
+  encoded_all <- unname(as.numeric(x_interest_recode[1, all_names, drop = TRUE]))
+  centred_all <- encoded_all - unname(ref_means[all_names])
+  effect_all <- unname(beta[all_names]) * centred_all
+  baseline <- unname(beta["(Intercept)"]) + sum(unname(beta[all_names]) * unname(ref_means[all_names]))
+  # drop zero contributions first, then keep the k largest
+  nz <- which(abs(effect_all) > sqrt(.Machine$double.eps))
+  nz <- nz[order(abs(effect_all[nz]), decreasing = TRUE)]
+  keep_idx <- utils::head(nz, k)
+  feature_names <- all_names[keep_idx]
   raw_feature_names <- sub("=.*$", "", feature_names)
-  observed_values <- vapply(raw_feature_names, function(feat) x_interest[[feat]][1], FUN.VALUE = x_interest[[1]][1])
+  # a list, as the kept features can mix factor and numeric columns
+  observed_values <- lapply(raw_feature_names, function(feat) x_interest[[feat]][1])
   display_values <- vapply(raw_feature_names, function(feat) .format_feature_value(x_interest[[feat]][1]), character(1))
   effects <- data.frame(
     feature = raw_feature_names,
@@ -850,14 +1054,13 @@ interpret_local_model <- function(fit, data, features, type, class_level, pos_le
         .feature_display_label(raw_feature_names[i], observed_values[[i]])
       }
     }, character(1)),
-    observed_value = display_values,
-    encoded_value = encoded_values,
+    observed_value = unname(display_values),
+    encoded_value = encoded_all[keep_idx],
+    reference_value = unname(ref_means[feature_names]),
     beta = unname(beta[feature_names]),
-    effect = unname(beta[feature_names]) * encoded_values,
+    effect = effect_all[keep_idx],
     stringsAsFactors = FALSE
   )
-  effects <- effects[effects$effect != 0, , drop = FALSE]
-  effects <- effects[order(abs(effects$effect), decreasing = TRUE), , drop = FALSE]
   rownames(effects) <- NULL
 
   local_pred <- as.numeric(stats::predict(model, newdata = data.frame(x_interest_recode, check.names = FALSE))[1])
@@ -869,15 +1072,21 @@ interpret_local_model <- function(fit, data, features, type, class_level, pos_le
       weights = effects,
       sample_weights = sample_weights,
       model = model,
-      local_prediction = local_pred
+      local_prediction = local_pred,
+      baseline = baseline
     ),
     diagnostics = list(
       reference = "native local surrogate",
-      neighborhood = "similarity",
+      neighborhood = neighborhood,
       k = k,
+      n_nonzero = length(nz),
       prediction = .predict_numeric_target(fit, newdata[1, , drop = FALSE], type = type, class_level = class_level, pos_level = pos_level)
     )
   )
+}
+
+interpret_lime <- function(..., sampler = NULL) {
+  interpret_local_model(..., sampler = "perturb")
 }
 
 interpret_shap <- function(fit, data, features, type, class_level, pos_level, newdata, nsim, nsamples,
@@ -903,7 +1112,7 @@ interpret_shap <- function(fit, data, features, type, class_level, pos_level, ne
       set.seed(task_seed)
     }
     x_interest <- newdata[obs_id, , drop = FALSE]
-    pred_interest <- pred_one(x_interest)[1]
+    pred_interest <- unname(pred_one(x_interest)[1])
     contrib <- matrix(0, nrow = nsim, ncol = length(features), dimnames = list(NULL, features))
     start_preds <- numeric(nsim)
 
@@ -923,7 +1132,7 @@ interpret_shap <- function(fit, data, features, type, class_level, pos_level, ne
 
     shap_vals <- colMeans(contrib)
     shap_var <- if (nsim > 1) apply(contrib, 2, stats::var) else rep(NA_real_, length(features))
-    baseline_value <- baseline %||% mean(start_preds)
+    baseline_value <- unname(baseline %||% mean(start_preds))
     numeric_values <- suppressWarnings(as.numeric(unlist(x_interest[1, features, drop = FALSE], use.names = FALSE)))
     data.frame(
       observation = obs_id,
@@ -934,7 +1143,8 @@ interpret_shap <- function(fit, data, features, type, class_level, pos_level, ne
       prediction = pred_interest,
       feature_value = unlist(lapply(x_interest[1, features, drop = FALSE], as.character), use.names = FALSE),
       raw_value = numeric_values,
-      feature_label = vapply(features, function(feat) .feature_display_label(feat, x_interest[[feat]][1]), character(1)),
+      feature_label = vapply(features, function(feat) .feature_display_label(feat, x_interest[[feat]][1]),
+                             character(1), USE.NAMES = FALSE),
       stringsAsFactors = FALSE
     )
   }, ncores = ncores)
@@ -1075,7 +1285,9 @@ interpret_shap <- function(fit, data, features, type, class_level, pos_level, ne
 }
 
 interpret_interaction <- function(fit, data, features, type, class_level, pos_level, nsamples,
-                                  feature = NULL, grid_size = 15, ...) {
+                                  feature = NULL, grid = NULL, grid_size = 15, ...) {
+  # `grid` is accepted so that interpret()'s `grid =` is not partially
+  # matched to `grid_size`.
   data_use <- if (!is.null(nsamples) && nrow(data) > nsamples) data[sample(seq_len(nrow(data)), nsamples), , drop = FALSE] else data
   if (!is.null(feature) && !(feature %in% features)) {
     stop("`feature` must be one of the interpreted features.", call. = FALSE)
@@ -1401,8 +1613,10 @@ summary.funcml_pdp <- function(object, ...) {
 #' ICE result methods.
 #'
 #' These methods provide the standard `print()`, `summary()`, and `plot()`
-#' interfaces for `funcml_ice` objects returned by `interpret(method = "ice")`
-#' or `interpret(method = "ceteris_paribus")`.
+#' interfaces for `funcml_ice` objects returned by `interpret(method = "ice")`.
+#' Results of `interpret(method = "ceteris_paribus")` reuse `print()` and
+#' `summary()` but have their own `plot()` method
+#' ([plot.funcml_ceteris_paribus()]).
 #'
 #' @param x A `funcml_ice` object.
 #' @param object A `funcml_ice` object.
@@ -1458,6 +1672,95 @@ print.funcml_ice <- function(x, ...) {
 summary.funcml_ice <- function(object, ...) {
   print(object$result$curves)
   invisible(object$result$curves)
+}
+
+#' Ceteris paribus result methods.
+#'
+#' `plot()` method for `funcml_ceteris_paribus` objects returned by
+#' `interpret(method = "ceteris_paribus")`. Each profiled observation gets
+#' one line per feature (the prediction as that feature moves over its grid
+#' while the others stay at their observed values), and a point marks the
+#' observed feature value with its prediction. `print()` and `summary()` are
+#' inherited from the `funcml_ice` methods.
+#'
+#' @param x A `funcml_ceteris_paribus` object.
+#' @param ... Additional arguments (unused).
+#' @return A `ggplot2` object.
+#'
+#' @name interpret-ceteris-paribus-methods
+#' @aliases plot.funcml_ceteris_paribus
+#' @examples
+#' fit_obj <- fit(mpg ~ wt + hp + disp, data = mtcars, model = "rpart",
+#'   spec = list(cp = 0.01, minsplit = 5))
+#' cp <- interpret(
+#'   fit = fit_obj,
+#'   data = mtcars,
+#'   method = "ceteris_paribus",
+#'   newdata = mtcars[1, ],
+#'   features = c("wt", "hp")
+#' )
+#' plot(cp)
+#' @export
+plot.funcml_ceteris_paribus <- function(x, ...) {
+  curves <- x$result$curves
+  newdata <- x$result$newdata
+  observed <- x$result$observed
+  features <- unique(as.character(curves$feature))
+
+  points <- NULL
+  if (!is.null(newdata) && !is.null(observed)) {
+    points <- .rbind_dt(lapply(features, function(feat) {
+      data.frame(
+        id = seq_len(nrow(newdata)),
+        feature = feat,
+        value = if (is.numeric(curves$value)) as.numeric(newdata[[feat]]) else as.character(newdata[[feat]]),
+        yhat = as.numeric(observed),
+        stringsAsFactors = FALSE
+      )
+    }))
+  }
+
+  # Coerce curve and point values together so a categorical feature keeps
+  # one set of factor levels across lines and points.
+  all_values <- c(curves$value, if (!is.null(points)) points$value)
+  plot_values <- .coerce_plot_value(all_values)
+  curves$plot_value <- plot_values[seq_len(nrow(curves))]
+
+  n_profiles <- length(unique(curves$id))
+  title <- if (n_profiles > 1L) {
+    sprintf("Ceteris paribus profiles (%d observations)", n_profiles)
+  } else {
+    "Ceteris paribus profile"
+  }
+
+  p <- ggplot2::ggplot(curves, ggplot2::aes(x = plot_value, y = yhat, group = id)) +
+    ggplot2::geom_line(
+      colour = if (n_profiles > 1L) "grey35" else .funcml_palette$ink,
+      linewidth = if (n_profiles > 1L) 0.5 else 0.7
+    )
+  if (!is.null(points)) {
+    points$plot_value <- plot_values[nrow(curves) + seq_len(nrow(points))]
+    p <- p + ggplot2::geom_point(
+      data = points,
+      ggplot2::aes(x = plot_value, y = yhat),
+      inherit.aes = FALSE,
+      size = 2.4,
+      colour = .funcml_palette$accent
+    )
+  }
+  p <- p +
+    ggplot2::facet_wrap(~feature, scales = "free_x") +
+    ggplot2::labs(
+      x = "Feature value",
+      y = .prediction_axis_label(x$task, x$type, context = "ice"),
+      title = title,
+      subtitle = "Other features fixed at their observed values. Point: observed value."
+    ) +
+    .publication_theme()
+  if (x$task != "regression" && identical(x$type, "prob")) {
+    p <- p + ggplot2::coord_cartesian(ylim = c(0, 1))
+  }
+  p
 }
 
 #' ALE result methods.

@@ -7,13 +7,18 @@
   ids[keep]
 }
 
-.ensemble_default_learners <- function(task) {
+.ensemble_default_learners <- function(task, levels = NULL) {
   candidates <- if (task == "regression") {
     c("glm", "rpart", "kknn")
   } else {
     c("glm", "rpart", "kknn", "nnet", "mlp")
   }
   allowed <- .ensemble_allowed_learners(task)
+  if (task == "classification" && length(levels) > 2L) {
+    # Drop base learners that cannot fit a multiclass outcome (for example glm).
+    reg <- funcml_registry()
+    allowed <- allowed[vapply(allowed, function(id) isTRUE(reg[[id]]$supports$multiclass), logical(1))]
+  }
   out <- candidates[candidates %in% allowed]
   if (!length(out)) {
     out <- allowed[seq_len(min(1L, length(allowed)))]
@@ -251,13 +256,25 @@
   oof
 }
 
-.smooth_formula <- function(X) {
+# A column becomes a smooth term only when it has enough distinct values to support
+# the default basis (10); binary, dummy-coded, and other low-cardinality columns enter
+# linearly. Without this, mgcv stops with "A term has fewer unique covariate
+# combinations than specified maximum degrees of freedom".
+.smooth_formula <- function(X, min_unique = 11L) {
   vars <- setdiff(colnames(X), "(Intercept)")
   if (!length(vars)) {
     return(stats::as.formula("y ~ 1"))
   }
-  rhs <- paste(sprintf("s(`%s`)", vars), collapse = " + ")
-  stats::as.formula(paste("y ~", rhs))
+  n_unique <- vapply(vars, function(v) length(unique(X[, v])), integer(1))
+  terms <- ifelse(n_unique >= min_unique, sprintf("s(%s)", vars), vars)
+  stats::as.formula(paste("y ~", paste(terms, collapse = " + ")))
+}
+
+# Syntactically valid, unique column names. mgcv rebuilds its formula from term labels
+# without quoting, so names such as `agegp35-44` or `agegp75+` break it.
+.safe_colnames <- function(X) {
+  safe <- make.names(colnames(X), unique = TRUE)
+  list(names = safe, map = stats::setNames(safe, colnames(X)))
 }
 
 .dbarts_predict_mean <- function(object, Xnew) {
@@ -350,11 +367,39 @@ build_registry <- function() {
       fit_xy = function(X, y, spec, task, ...) {
         assert_package("glmnet", "glmnet")
         family <- if (task == "regression") "gaussian" else if (length(unique(y)) > 2) "multinomial" else "binomial"
-        fit <- glmnet::glmnet(x = X, y = y, family = family, alpha = spec$alpha, lambda = spec$lambda)
-        list(state = fit, family = family)
+        # glmnet needs at least two columns; pad a single predictor with a constant zero column.
+        pad <- ncol(X) < 2L
+        if (pad) X <- cbind(X, .pad = 0)
+        if (is.null(spec$lambda)) {
+          # No lambda supplied: choose it by cross-validation. The first (largest) lambda of the
+          # path shrinks every coefficient to zero, which is an intercept-only model.
+          n <- nrow(X)
+          nfolds <- min(10L, max(3L, as.integer(floor(n / 3))))
+          cv <- tryCatch(
+            glmnet::cv.glmnet(x = X, y = y, family = family, alpha = spec$alpha, nfolds = nfolds),
+            error = function(e) NULL
+          )
+          if (is.null(cv)) {
+            fit <- glmnet::glmnet(x = X, y = y, family = family, alpha = spec$alpha)
+            lambda_sel <- stats::median(fit$lambda)
+          } else {
+            fit <- cv$glmnet.fit
+            lambda_sel <- cv$lambda.min
+          }
+        } else {
+          # Fit the whole path with the requested lambda added to it. A single small lambda fitted from
+          # a cold start converges very slowly on large data (minutes on 15,000 rows) and often fails,
+          # returning an empty (intercept-only) model; along the path each lambda starts from the last.
+          path <- glmnet::glmnet(x = X, y = y, family = family, alpha = spec$alpha)$lambda
+          lambdas <- sort(unique(c(path, spec$lambda)), decreasing = TRUE)
+          fit <- glmnet::glmnet(x = X, y = y, family = family, alpha = spec$alpha, lambda = lambdas)
+          lambda_sel <- spec$lambda[[1L]]
+        }
+        list(state = fit, family = family, lambda_sel = lambda_sel, pad = pad)
       },
       predict_xy = function(state, Xnew, type, levels, spec, ...) {
-        lambda_use <- spec$lambda %||% state$state$lambda[1]
+        if (isTRUE(state$pad)) Xnew <- cbind(Xnew, .pad = 0)
+        lambda_use <- spec$lambda %||% state$lambda_sel
         if (is.null(levels)) {
           p <- stats::predict(state$state, newx = Xnew, type = "response", s = lambda_use)
           return(as.numeric(p))
@@ -413,6 +458,11 @@ build_registry <- function() {
           return(factor(cls, levels = levels))
         }
         prob[, levels, drop = FALSE]
+      },
+      importance = function(state, X, y, feature_names, task, levels, ...) {
+        imp <- tryCatch(ranger::importance(state$state), error = function(e) NULL)
+        if (is.null(imp)) return(data.frame(feature = feature_names, importance = NA_real_))
+        data.frame(feature = names(imp), importance = as.numeric(imp), row.names = NULL)
       }
     ),
     nnet = list(
@@ -451,41 +501,31 @@ build_registry <- function() {
           return(factor(cls, levels = levels))
         }
         prob
-      },
-      importance = function(state, X, y, feature_names, task, levels, ...) {
-        imp <- tryCatch(ranger::importance(state$state), error = function(e) NULL)
-        if (is.null(imp)) return(data.frame(feature = feature_names, importance = NA_real_))
-        data.frame(feature = names(imp), importance = as.numeric(imp), row.names = NULL)
       }
     ),
     mlp = list(
-      package = "torch",
+      package = "densemlp",
       tasks = c("regression", "classification"),
       defaults = list(
         hidden_units = c(64L, 32L),
-        activation = "relu",
         dropout = 0,
         batch_norm = FALSE,
         epochs = 100L,
         batch_size = 32L,
         lr = 1e-3,
-        optimizer = "adam",
-        weight_decay = 0,
         validation = 0.2,
         early_stopping = TRUE,
         patience = 10L,
         min_delta = 0,
-        standardize = TRUE,
         seed = 1L,
-        verbose = FALSE,
-        device = "auto"
+        verbose = FALSE
       ),
       supports = list(prob = TRUE, multiclass = TRUE, importance = FALSE),
       fit_xy = function(X, y, spec, task, levels, ...) {
-        .mlp_fit_torch(X = X, y = y, task = task, levels = levels, spec = spec)
+        .mlp_fit(X = X, y = y, spec = spec, task = task, levels = levels)
       },
       predict_xy = function(state, Xnew, type, levels, spec, ...) {
-        .mlp_predict_torch(state = state, Xnew = Xnew, type = type, levels = levels)
+        .densemlp_predict(state = state, Xnew = Xnew, type = type, levels = levels)
       }
     ),
     densemlp = list(
@@ -493,27 +533,26 @@ build_registry <- function() {
       tasks = c("regression", "classification"),
       defaults = list(
         hidden_units = c(64L, 32L),
-        activation = "relu",
         dropout = 0,
-        batch_norm = TRUE,
         residual = FALSE,
         gated = FALSE,
+        batch_norm = TRUE,
         input_projection = NULL,
+        interaction = FALSE,
+        ema_decay = 0,
+        ensemble = 1L,
+        ensemble_bootstrap = TRUE,
         epochs = 100L,
         batch_size = 32L,
         lr = 1e-3,
-        optimizer = "adam",
         lr_schedule = "none",
-        weight_decay = 0,
         validation = 0.2,
         early_stopping = TRUE,
         patience = 10L,
         min_delta = 0,
-        label_smoothing = 0,
-        focal_gamma = 2,
         seed = 1L,
         verbose = FALSE,
-        device = "auto"
+        ncores = 1L
       ),
       supports = list(prob = TRUE, multiclass = TRUE, importance = FALSE),
       fit_xy = function(X, y, spec, task, levels, ...) {
@@ -577,14 +616,14 @@ build_registry <- function() {
       },
       predict_xy = function(state, Xnew, type, levels, spec, ...) {
         if (is.null(levels)) {
-          return(as.numeric(stats::predict(state$state, newdata = data.frame(Xnew))))
+          return(as.numeric(stats::predict(state$state, newdata = data.frame(Xnew, check.names = FALSE))))
         }
         if (type == "prob") {
-          prob <- stats::predict(state$state, newdata = data.frame(Xnew), type = "prob")
+          prob <- stats::predict(state$state, newdata = data.frame(Xnew, check.names = FALSE), type = "prob")
           prob <- as.matrix(prob)[, levels, drop = FALSE]
           return(prob)
         }
-        cls <- stats::predict(state$state, newdata = data.frame(Xnew), type = "response")
+        cls <- stats::predict(state$state, newdata = data.frame(Xnew, check.names = FALSE), type = "response")
         factor(cls, levels = levels)
       },
       importance = function(state, X, y, feature_names, task, levels, ...) {
@@ -760,11 +799,14 @@ build_registry <- function() {
         if (is.null(family)) {
           family <- if (task == "regression") stats::gaussian() else stats::binomial()
         }
+        safe <- .safe_colnames(X)
+        colnames(X) <- safe$names
         df <- data.frame(y = y, X, check.names = FALSE)
         fit <- mgcv::gam(.smooth_formula(X), data = df, family = family, method = spec$method)
-        list(state = fit, task = task)
+        list(state = fit, task = task, name_map = safe$map)
       },
       predict_xy = function(state, Xnew, type, levels, spec, ...) {
+        colnames(Xnew) <- state$name_map[colnames(Xnew)]
         pred <- stats::predict(state$state, newdata = data.frame(Xnew, check.names = FALSE), type = "response")
         if (is.null(levels)) return(as.numeric(pred))
         prob <- pmin(pmax(as.numeric(pred), 1e-6), 1 - 1e-6)
@@ -836,6 +878,9 @@ build_registry <- function() {
         if (length(unique(y)) > 2) {
           stop("adaboost supports only binary classification.", call. = FALSE)
         }
+        # ada builds a model frame from `y ~ .`, which breaks on names such as `agegp35-44`.
+        safe <- .safe_colnames(X)
+        colnames(X) <- safe$names
         df <- data.frame(y = y, X, check.names = FALSE)
         fit <- ada::ada(
           y ~ ., data = df,
@@ -844,10 +889,14 @@ build_registry <- function() {
           loss = spec$loss,
           type = spec$type
         )
-        backend_levels <- colnames(fit$confusion) %||% levels(y)
-        list(state = fit, backend_levels = backend_levels)
+        # The probability columns follow the sorted class labels, which are the row names of the
+        # confusion matrix. Its column names can have length 1 and must not be used.
+        rn <- rownames(fit$confusion)
+        backend_levels <- if (length(rn) == nlevels(y)) rn else sort(levels(y))
+        list(state = fit, backend_levels = backend_levels, name_map = safe$map)
       },
       predict_xy = function(state, Xnew, type, levels, spec, ...) {
+        colnames(Xnew) <- state$name_map[colnames(Xnew)]
         new_df <- data.frame(Xnew, check.names = FALSE)
         if (type == "prob") {
           prob <- stats::predict(state$state, newdata = new_df, type = "probs")
@@ -1064,6 +1113,9 @@ build_registry <- function() {
           keeptrees = spec$keeptrees,
           verbose = spec$verbose
         )
+        # dbarts keeps the sampler outside R; touching fit$fit$state copies it
+        # into the object so the fit survives saveRDS()/readRDS().
+        if (isTRUE(spec$keeptrees) && !is.null(fit$fit)) invisible(fit$fit$state)
         list(state = fit, task = task)
       },
       predict_xy = function(state, Xnew, type, levels, spec, ...) {
@@ -1141,13 +1193,39 @@ build_registry <- function() {
         data.frame(feature = imp$Feature, importance = imp$Gain, row.names = NULL)
       }
     ),
+    fastgbm = list(
+      package = "fastgbm",
+      tasks = c("regression", "classification"),
+      defaults = list(
+        ntrees = 200L,
+        learning_rate = 0.1,
+        max_depth = 5L,
+        min_node_size = 10L,
+        max_bins = 255L,
+        subsample = 0.8,
+        colsample = 0.8,
+        lambda = 1,
+        gamma = 0,
+        min_child_weight = 1,
+        threads = 0L,
+        seed = 1L,
+        verbose = FALSE
+      ),
+      supports = list(prob = TRUE, multiclass = TRUE, importance = FALSE),
+      fit_xy = function(X, y, spec, task, levels, ...) {
+        .fastgbm_fit(X = X, y = y, spec = spec, task = task, levels = levels)
+      },
+      predict_xy = function(state, Xnew, type, levels, spec, ...) {
+        .fastgbm_predict(state = state, Xnew = Xnew, type = type, levels = levels)
+      }
+    ),
     stacking = list(
       package = "stats",
       tasks = c("regression", "classification"),
       defaults = list(learners = NULL, learner_specs = list(), meta_model = "glmnet"),
       supports = list(prob = TRUE, multiclass = TRUE, importance = FALSE),
       fit_xy = function(X, y, spec, task, levels, ...) {
-        learners <- spec$learners %||% .ensemble_default_learners(task)
+        learners <- spec$learners %||% .ensemble_default_learners(task, levels)
         .ensemble_validate_learners(learners, task)
         learner_specs <- .ensemble_prepare_specs(learners, spec$learner_specs %||% list())
         base_models <- .ensemble_fit_base_models(X, y, learners, learner_specs, task, levels)
@@ -1186,7 +1264,7 @@ build_registry <- function() {
       defaults = list(learners = NULL, learner_specs = list(), meta_model = "glmnet", resampling = cv(5, seed = 1)),
       supports = list(prob = TRUE, multiclass = TRUE, importance = FALSE),
       fit_xy = function(X, y, spec, task, levels, ...) {
-        learners <- spec$learners %||% .ensemble_default_learners(task)
+        learners <- spec$learners %||% .ensemble_default_learners(task, levels)
         .ensemble_validate_learners(learners, task)
         learner_specs <- .ensemble_prepare_specs(learners, spec$learner_specs %||% list())
         resampling <- spec$resampling %||% cv(5, seed = 1)

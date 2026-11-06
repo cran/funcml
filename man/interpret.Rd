@@ -49,17 +49,21 @@ interpret(
 
 \item{metric}{Loss/score for importance (reg: rmse/mae/mse/medae/mape/rsq; cls: accuracy/precision/recall/specificity/f1/balanced_accuracy/logloss/brier/ece/mce/auc/auc_weighted).}
 
-\item{importance_type}{Importance engine for \code{method = "vip"}. Internal
-permutation importance is always used; accepted values are retained only
-for backward-compatible argument parsing.}
+\item{importance_type}{Importance engine for \code{method = "vip"}:
+\code{"permute"} (permutation importance, the default), \code{"model"} (the
+learner's native importance, e.g. impurity for \code{ranger}; an error for
+learners without one, see \code{list_learners(importance = TRUE)}), or
+\code{"auto"} (native importance when available, permutation otherwise).
+Native scores of dummy-coded factor levels are summed per feature.}
 
 \item{compare}{How to compare baseline and perturbed performance for
 importance: \code{"difference"} or \code{"ratio"}.}
 
 \item{keep}{Keep per-repetition raw importance scores when \code{nsim > 1}.}
 
-\item{k}{Sparsity target for local surrogate fits (\code{method = "local"},
-\code{"local_model"}, or \code{"lime"}).}
+\item{k}{Number of contributions reported by local surrogate fits
+(\code{method = "local"}, \code{"local_model"}, or \code{"lime"}): the \code{k} largest
+absolute contributions after dropping zero ones.}
 
 \item{gower_power}{Exponent applied to native similarity weights when constructing the
 local neighborhood.}
@@ -68,7 +72,9 @@ local neighborhood.}
 
 \item{pos_level}{Alias for binary positive class (second level default).}
 
-\item{newdata}{Single-row data frame for local/SHAP explanations; defaults to first row of \code{data}.}
+\item{newdata}{Single-row data frame for local/SHAP explanations; defaults to first row of \code{data}.
+For \code{method = "ceteris_paribus"}, the observation(s) to profile (one
+profile per row; the grid of each feature is built from \code{data}).}
 
 \item{nsim}{Number of Monte Carlo simulations (importance/SHAP) or repetitions.}
 
@@ -99,6 +105,19 @@ for printing, summarizing, and plotting.
 \description{
 Implements native permutation VI, PDP/ICE/ALE, SHAP approximations, local
 surrogate explanations, interaction strength, and global surrogate models.
+}
+\details{
+Local surrogates. \code{"local"} and \code{"local_model"} are the same method: a
+weighted linear model fitted to the predictions on the reference data,
+weighted by similarity to \code{newdata} (\code{gower_power}). \code{"lime"} fits the
+same surrogate on \code{nperturb} synthetic points (default 1000) drawn from
+the feature marginals of \code{data} (numeric: normal with the data mean and
+sd; categorical: empirical frequencies), weighted by an exponential
+kernel on the scaled distance to \code{newdata} (width \code{0.75 * sqrt(p)}), as
+in LIME. In both, a contribution is \code{beta * (x - mean(x))}, with the
+mean taken over \code{data} (categorical features are coded 1 when equal to
+the level of \code{newdata}), so the contributions sum to
+\code{local_prediction - baseline}, both returned in \code{result}.
 }
 \examples{
 fit_obj <- fit(

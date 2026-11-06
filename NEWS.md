@@ -1,13 +1,116 @@
-# funcml 0.9.0
+# funcml 0.9.6
 
-- Prepared for CRAN resubmission: removed the unused `methods` package
-  from `Imports`, added explicit `importFrom` declarations for
-  `predict()`, `model.frame()`, `model.response()`, `setNames()`,
-  `median()` (stats) and `tail()` (utils) via a new package-level
-  `R/funcml-package.R`, and excluded `LICENSE.md` from the build (the
-  package uses the standard `GPL-3` license text that R bundles
-  automatically; the file remains in the GitHub repo only). `R CMD
-  check --as-cran` now passes with 0 errors, 0 warnings, 0 notes.
+- `torch` is no longer a dependency. The `mlp` learner now runs on the
+  `densemlp` engine (C++, RcppArmadillo) as a plain multilayer perceptron:
+  ReLU hidden layers, Adam, standardized inputs, no batch normalization by
+  default. Task support (regression, binary, multiclass) and the arguments
+  `hidden_units`, `dropout`, `batch_norm`, `epochs`, `batch_size`, `lr`,
+  `validation`, `early_stopping`, `patience`, `min_delta`, `seed` and
+  `verbose` are unchanged. `activation`, `optimizer`, `weight_decay`,
+  `standardize` and `device` have no equivalent: their default values
+  (`"relu"`, `"adam"`, `0`, `TRUE`, `"auto"`/`"cpu"`) are accepted silently,
+  any other value is ignored with a warning. The default `mlp` tuning grid
+  now varies `batch_norm` instead of `weight_decay`. Fitted `mlp` models are
+  plain R objects, so they can be saved with `saveRDS()` and reused across
+  forked workers. Use the `densemlp` learner for the engine's advanced
+  options (residual and gated blocks, ensembles, learning-rate schedules).
+- `bart` fits now survive `saveRDS()`/`readRDS()`. dbarts keeps the sampler
+  state outside R, so a reloaded fit predicted a constant probability; the
+  state is now stored in the object at fit time.
+- `interpret(method = "ceteris_paribus")` now profiles the row(s) of
+  `newdata` (default: the first row of `data`), with each feature's grid
+  built from `data`. It used to run ICE on every row of `data` and ignore
+  `newdata`. The result also carries `newdata` and its observed prediction.
+- `plot()` on an `interpret(method = "ceteris_paribus")` result has its own
+  method: it is titled "Ceteris paribus profile" (not "ICE plot"), draws one
+  profile per observation in `newdata` without the ICE mean curve, and marks
+  the observed feature value and its prediction with a point on each profile.
+- Local surrogates (`"local"`, `"local_model"`, `"lime"`): contributions are
+  now `beta * (x - mean(x))`, centred on the reference data, and sum to
+  `local_prediction - baseline` (`baseline` is new in `result`). Before,
+  numeric contributions were `beta * x`, so 0/1 predictors at 0 gave empty
+  explanations. `k` now picks the `k` largest contributions after dropping
+  zero ones (it used to rank by |beta| and then drop zeros).
+- `"lime"` is now a distinct method: the surrogate is fitted on `nperturb`
+  points sampled from the feature marginals with an exponential kernel, as in
+  LIME. `"local"` and `"local_model"` remain aliases of the similarity-weighted
+  surrogate on the observed data.
+- `estimate()` checks positivity up front: a clear error when the treatment
+  has one observed value, a warning when an arm has fewer than 10 rows. With
+  `interval = "bootstrap"`, a resample without treated or control rows is
+  redrawn instead of stopping the whole call with "Treatment must be binary",
+  and a failing resample is dropped with a warning. The counts are returned
+  in `$bootstrap`.
+- `interpret(method = "shap")` no longer warns "row names were found from a
+  short variable" with learners that return named predictions (`ranger`).
+
+# funcml 0.9.5
+
+Bug fixes found while benchmarking every learner on 63 biomedical datasets.
+
+- `compare(ncores > 1)` now keeps the per-fold results in `$details`. The
+  parallel worker stored them with `<<-`, which is lost in a forked process,
+  so only the summaries survived.
+- The default `glmnet` learner is no longer an intercept-only model. With
+  `lambda = NULL` it predicted at the largest lambda of the path, where every
+  coefficient is zero; lambda is now chosen by cross-validation
+  (`cv.glmnet()`, `lambda.min`). `glmnet` also accepts a single predictor.
+- `gam`: predictors with too few distinct values (binary, dummy-coded) enter
+  linearly instead of as smooths, and non-syntactic column names such as
+  `agegp35-44` no longer break the formula.
+- `randomForest` predicts correctly when dummy-column names are not syntactic;
+  the new data was built with `check.names = TRUE` and no longer matched the
+  training columns.
+- `adaboost` handles non-syntactic column names and maps the probability
+  columns to the class labels by the sorted label order that `ada` uses.
+- `stacking` and `superlearner` no longer include `glm` (binary only) among the
+  default base learners for a multiclass outcome.
+- `glmnet` with a given `lambda` (as in tuning grids) is fitted along the whole
+  path with that lambda added, instead of from a single cold start. A single
+  small lambda took minutes on 15,000 rows and often failed to converge,
+  returning an empty (intercept-only) model.
+- `interpret(method = "vip", importance_type = "model")` returns the learner's
+  native importance again (e.g. impurity for `ranger` and `rpart`, relative
+  influence for `gbm`). It had been silently replaced by permutation
+  importance. Scores of dummy-coded factor levels are summed per feature;
+  `"auto"` uses native importance when the learner has one, and `"model"` on a
+  learner without one is now an error.
+- The `ranger` learner exposes its native importance; the function had been
+  attached to `nnet` by mistake.
+- New `default_tune_grid()` returns a default hyperparameter grid for each
+  learner. `tune()` and `compare(tune = TRUE)` use it when `grid` or `grids`
+  is not supplied; a learner with no hyperparameters is evaluated with its own
+  `specs` entry. Previously they stopped with "`grids` must be supplied".
+
+# funcml 0.9.4
+
+- Dropped `Remotes: ielbadisy/fastgbm` now that `fastgbm` is itself on CRAN;
+  it was the only thing blocking this package's own CRAN resubmission.
+
+# funcml 0.9.3
+
+- Migrated the internal `.rbind_dt()` row-accumulation helper from
+  `data.table` to `basetable`. `data.table` dropped from `Imports`
+  entirely (this was its only use site); `basetable` added.
+
+# funcml 0.9.2
+
+- Added `fastgbm` as a new registry learner: a histogram-based gradient
+  boosting engine (RcppParallel) covering regression, binary, and
+  multiclass classification, alongside the existing `gbm`, `xgboost`, and
+  `lightgbm` tree ensembles. `fastgbm` is not yet on CRAN, so it is listed
+  under `Remotes: ielbadisy/fastgbm`.
+
+# funcml 0.9.1
+
+- Fixed the `densemlp` learner wrapper: it was still calling the retired
+  torch-based `densemlp` API (`task = "classification"`, `new_data`,
+  `activation`/`optimizer`/`weight_decay`/`label_smoothing`/`focal_gamma`/
+  `device`). `densemlp` on CRAN is now a C++/RcppArmadillo engine with a
+  `task = "regression"/"binary"/"multiclass"` interface and no `torch`
+  dependency; the wrapper, its default hyperparameters, and the
+  `torch_is_installed()` availability check (only `mlp` still needs it)
+  and fork-safety list are all updated to match.
 
 # funcml 0.8.9
 
